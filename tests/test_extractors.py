@@ -1,15 +1,16 @@
 """Tests for data extractors."""
 
-import pytest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from src.extractors.files import extract_module, extract_file_change
-from src.extractors.prs import is_bot, parse_datetime, extract_pr
-from src.extractors.users import extract_user
-from src.extractors.reviews import extract_review
-from src.extractors.comments import extract_pr_comment, extract_review_comment
+import pytest
+
 from src.extractors.checks import extract_check_run
-from src.extractors.timeline import extract_timeline_event, RELEVANT_EVENTS
+from src.extractors.comments import extract_pr_comment, extract_review_comment
+from src.extractors.files import extract_file_change, extract_module
+from src.extractors.prs import extract_pr, is_bot, parse_datetime
+from src.extractors.reviews import extract_review
+from src.extractors.timeline import RELEVANT_EVENTS, extract_timeline_event
+from src.extractors.users import extract_user
 
 
 # Factory helpers
@@ -116,11 +117,11 @@ class TestParseDatetime:
 
     def test_iso_with_z(self):
         result = parse_datetime("2025-01-15T10:30:00Z")
-        assert result == datetime(2025, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+        assert result == datetime(2025, 1, 15, 10, 30, 0, tzinfo=UTC)
 
     def test_iso_with_offset(self):
         result = parse_datetime("2025-01-15T10:30:00+00:00")
-        assert result == datetime(2025, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+        assert result == datetime(2025, 1, 15, 10, 30, 0, tzinfo=UTC)
 
     def test_none_returns_none(self):
         assert parse_datetime(None) is None

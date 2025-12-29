@@ -1,4 +1,7 @@
-"""Main orchestrator for GitHub data extraction with TUI."""
+"""Main orchestrator for GitHub data extraction with TUI.
+
+Uses trio for concurrent API requests per PR.
+"""
 
 import json
 import logging
@@ -7,47 +10,42 @@ import signal
 import sys
 import traceback
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
-from pathlib import Path
-from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import trio
 from rich.console import Console
 from rich.live import Live
 from rich.table import Table
-from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
-from rich.layout import Layout
-from rich.text import Text
 
 from .config import (
     CHECKPOINT_FILE,
     CHECKPOINT_INTERVAL,
-    RAW_DATA_DIR,
-    START_DATE,
+    DATA_DIR,
     END_DATE,
     LOG_FILE,
-    DATA_DIR,
-    REPO_OWNER,
+    RAW_DATA_DIR,
     REPO_NAME,
+    REPO_OWNER,
+    START_DATE,
 )
-from .github_client import GitHubClient
-from .extractors.prs import extract_pr
-from .extractors.reviews import extract_review
+from .extractors.checks import extract_check_run
 from .extractors.comments import extract_pr_comment, extract_review_comment
 from .extractors.files import extract_file_change
-from .extractors.checks import extract_check_run
+from .extractors.prs import extract_pr
+from .extractors.reviews import extract_review
 from .extractors.timeline import extract_timeline_event
 from .extractors.users import extract_user
+from .github_client import GitHubClient
 from .models import (
+    CheckRun,
+    FileChange,
+    PRComment,
     PullRequest,
     Review,
-    PRComment,
     ReviewComment,
-    FileChange,
-    CheckRun,
     TimelineEvent,
     User,
 )
@@ -113,6 +111,20 @@ class ExtractionStats:
     state: ExtractionState = ExtractionState.RUNNING
 
 
+@dataclass
+class PRDetails:
+    """Results of extracting a single PR's details."""
+    pr: PullRequest
+    reviews: list[Review] = field(default_factory=list)
+    pr_comments: list[PRComment] = field(default_factory=list)
+    review_comments: list[ReviewComment] = field(default_factory=list)
+    files: list[FileChange] = field(default_factory=list)
+    checks: list[CheckRun] = field(default_factory=list)
+    timeline_events: list[TimelineEvent] = field(default_factory=list)
+    users: dict[int, User] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+
+
 class DataExtractor:
     """Main data extraction orchestrator with TUI."""
 
@@ -139,18 +151,19 @@ class DataExtractor:
         # Control flag
         self._stop_requested = False
 
-        # Setup signal handlers
-        signal.signal(signal.SIGINT, self._handle_interrupt)
-        signal.signal(signal.SIGTERM, self._handle_interrupt)
-
     def _handle_interrupt(self, signum, frame):
         """Handle Ctrl+C gracefully - save state and exit."""
         self._stop_requested = True
         self.stats.state = ExtractionState.PAUSED
         logger.info("Interrupt received, stopping gracefully...")
 
-    def load_checkpoint(self) -> bool:
-        """Load checkpoint if exists."""
+    def load_checkpoint(self, refresh_days: int | None = None) -> bool:
+        """Load checkpoint if exists.
+
+        Args:
+            refresh_days: If set, PRs created within the last N days will be
+                         removed from processed_prs so they get re-extracted.
+        """
         if not os.path.exists(CHECKPOINT_FILE):
             return False
 
@@ -164,6 +177,23 @@ class DataExtractor:
             for error_data in checkpoint.get("failed_prs", []):
                 pr_num = error_data["pr_number"]
                 self.failed_prs[pr_num] = ErrorRecord(**error_data)
+
+            # If refresh_days is set, remove recent PRs from processed set
+            if refresh_days and os.path.exists(f"{RAW_DATA_DIR}/prs.parquet"):
+                cutoff = datetime.now(UTC) - timedelta(days=refresh_days)
+                existing_prs = pq.read_table(f"{RAW_DATA_DIR}/prs.parquet")
+
+                # Find PRs created after cutoff
+                recent_prs = set()
+                for i in range(len(existing_prs)):
+                    pr_num = existing_prs.column("pr_number")[i].as_py()
+                    created_at = existing_prs.column("created_at")[i].as_py()
+                    if created_at and created_at >= cutoff:
+                        recent_prs.add(pr_num)
+
+                if recent_prs:
+                    self.processed_prs -= recent_prs
+                    self.console.print(f"[cyan]Refreshing {len(recent_prs)} PRs from last {refresh_days} days[/]")
 
             self.stats.skipped_prs = len(self.processed_prs)
             return True
@@ -187,7 +217,7 @@ class DataExtractor:
                 }
                 for e in self.failed_prs.values()
             ],
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "stats": {
                 "total_processed": len(self.processed_prs),
                 "total_failed": len(self.failed_prs),
@@ -208,7 +238,7 @@ class DataExtractor:
         with open(error_log_path, "w") as f:
             json.dump(
                 {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "total_errors": len(self.failed_prs),
                     "errors": [
                         {
@@ -225,150 +255,194 @@ class DataExtractor:
                 indent=2,
             )
 
-    def track_user(self, user_data: dict):
+    def _track_user(self, user_data: dict, users: dict[int, User]):
         """Track unique user."""
         if not user_data:
             return
         user_id = user_data.get("id")
-        if user_id and user_id not in self.users:
-            self.users[user_id] = extract_user(user_data)
-            self.stats.users_count = len(self.users)
+        if user_id and user_id not in users:
+            users[user_id] = extract_user(user_data)
 
-    def extract_pr_details(self, pr_number: int) -> bool:
-        """Extract all details for a single PR. Returns True on success."""
-        errors = []
-
-        # Get full PR details
-        pr_data = self.client.get(f"/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}")
+    async def extract_pr_details(self, pr_number: int, pr_data: dict) -> PRDetails:
+        """Extract all details for a single PR using concurrent requests."""
         pr = extract_pr(pr_data)
-        self.prs.append(pr)
-        self.track_user(pr_data.get("user", {}))
+        details = PRDetails(pr=pr)
 
-        # Extract reviews
-        try:
-            reviews_data = self.client.get_pr_reviews(pr_number)
-            for review_data in reviews_data:
-                self.reviews.append(extract_review(pr_number, review_data))
-                self.track_user(review_data.get("user", {}))
-            self.stats.reviews_count = len(self.reviews)
-        except Exception as e:
-            errors.append(f"reviews: {e}")
+        self._track_user(pr_data.get("user", {}), details.users)
 
-        # Extract PR comments
-        try:
-            comments_data = self.client.get_pr_comments(pr_number)
-            for comment_data in comments_data:
-                self.pr_comments.append(extract_pr_comment(pr_number, comment_data))
-                self.track_user(comment_data.get("user", {}))
-            self.stats.pr_comments_count = len(self.pr_comments)
-        except Exception as e:
-            errors.append(f"pr_comments: {e}")
-
-        # Extract review comments
-        try:
-            review_comments_data = self.client.get_pr_review_comments(pr_number)
-            for comment_data in review_comments_data:
-                self.review_comments.append(extract_review_comment(pr_number, comment_data))
-                self.track_user(comment_data.get("user", {}))
-            self.stats.review_comments_count = len(self.review_comments)
-        except Exception as e:
-            errors.append(f"review_comments: {e}")
-
-        # Extract files
-        try:
-            files_data = self.client.get_pr_files(pr_number)
-            for file_data in files_data:
-                self.files.append(extract_file_change(pr_number, file_data))
-            self.stats.files_count = len(self.files)
-        except Exception as e:
-            errors.append(f"files: {e}")
-
-        # Extract check runs
         head_sha = pr_data.get("head", {}).get("sha")
-        if head_sha:
+
+        # Use trio nursery to fetch all PR details concurrently
+        async def fetch_reviews():
             try:
-                checks_data = self.client.get_check_runs(head_sha)
-                for check_data in checks_data:
-                    self.checks.append(extract_check_run(pr_number, check_data))
-                self.stats.checks_count = len(self.checks)
+                reviews_data = await self.client.get_pr_reviews(pr_number)
+                for review_data in reviews_data:
+                    details.reviews.append(extract_review(pr_number, review_data))
+                    self._track_user(review_data.get("user", {}), details.users)
             except Exception as e:
-                errors.append(f"checks: {e}")
+                details.errors.append(f"reviews: {e}")
 
-        # Extract timeline events
-        try:
-            timeline_data = self.client.get_pr_timeline(pr_number)
-            for event_data in timeline_data:
-                event = extract_timeline_event(pr_number, event_data)
-                if event:
-                    self.timeline_events.append(event)
-                    actor = event_data.get("actor") or event_data.get("user")
-                    if actor:
-                        self.track_user(actor)
-            self.stats.timeline_events_count = len(self.timeline_events)
-        except Exception as e:
-            errors.append(f"timeline: {e}")
+        async def fetch_comments():
+            try:
+                comments_data = await self.client.get_pr_comments(pr_number)
+                for comment_data in comments_data:
+                    details.pr_comments.append(extract_pr_comment(pr_number, comment_data))
+                    self._track_user(comment_data.get("user", {}), details.users)
+            except Exception as e:
+                details.errors.append(f"pr_comments: {e}")
 
-        # Add to pending - only moves to processed after save to disk
+        async def fetch_review_comments():
+            try:
+                review_comments_data = await self.client.get_pr_review_comments(pr_number)
+                for comment_data in review_comments_data:
+                    details.review_comments.append(extract_review_comment(pr_number, comment_data))
+                    self._track_user(comment_data.get("user", {}), details.users)
+            except Exception as e:
+                details.errors.append(f"review_comments: {e}")
+
+        async def fetch_files():
+            try:
+                files_data = await self.client.get_pr_files(pr_number)
+                for file_data in files_data:
+                    details.files.append(extract_file_change(pr_number, file_data))
+            except Exception as e:
+                details.errors.append(f"files: {e}")
+
+        async def fetch_checks():
+            if not head_sha:
+                return
+            try:
+                checks_data = await self.client.get_check_runs(head_sha)
+                for check_data in checks_data:
+                    details.checks.append(extract_check_run(pr_number, check_data))
+            except Exception as e:
+                details.errors.append(f"checks: {e}")
+
+        async def fetch_timeline():
+            try:
+                timeline_data = await self.client.get_pr_timeline(pr_number)
+                for event_data in timeline_data:
+                    event = extract_timeline_event(pr_number, event_data)
+                    if event:
+                        details.timeline_events.append(event)
+                        actor = event_data.get("actor") or event_data.get("user")
+                        if actor:
+                            self._track_user(actor, details.users)
+            except Exception as e:
+                details.errors.append(f"timeline: {e}")
+
+        # Run all fetches concurrently
+        async with trio.open_nursery() as nursery:
+            nursery.start_soon(fetch_reviews)
+            nursery.start_soon(fetch_comments)
+            nursery.start_soon(fetch_review_comments)
+            nursery.start_soon(fetch_files)
+            nursery.start_soon(fetch_checks)
+            nursery.start_soon(fetch_timeline)
+
+        return details
+
+    def merge_details(self, details: PRDetails, pr_number: int):
+        """Merge PR details into main storage."""
+        self.prs.append(details.pr)
+        self.reviews.extend(details.reviews)
+        self.pr_comments.extend(details.pr_comments)
+        self.review_comments.extend(details.review_comments)
+        self.files.extend(details.files)
+        self.checks.extend(details.checks)
+        self.timeline_events.extend(details.timeline_events)
+
+        # Merge users
+        for user_id, user in details.users.items():
+            if user_id not in self.users:
+                self.users[user_id] = user
+
+        # Update stats
+        self.stats.reviews_count = len(self.reviews)
+        self.stats.pr_comments_count = len(self.pr_comments)
+        self.stats.review_comments_count = len(self.review_comments)
+        self.stats.files_count = len(self.files)
+        self.stats.checks_count = len(self.checks)
+        self.stats.timeline_events_count = len(self.timeline_events)
+        self.stats.users_count = len(self.users)
+
+        # Add to pending
         self.pending_prs.append(pr_number)
         self.stats.processed_prs = len(self.processed_prs) + len(self.pending_prs) - self.stats.skipped_prs
         self.stats.last_pr = pr_number
         self.stats.api_requests = self.client.request_count
 
-        # Log partial errors but still mark as processed
-        if errors:
-            self.stats.last_error = f"PR #{pr_number}: {'; '.join(errors)}"
-
-        return True
+        # Log partial errors
+        if details.errors:
+            self.stats.last_error = f"PR #{pr_number}: {'; '.join(details.errors)}"
 
     def save_parquet_incremental(self):
-        """Save all data to Parquet files (incremental/append mode)."""
+        """Save all data to Parquet files with upsert semantics.
+
+        When re-extracting PRs (e.g., with --refresh-days), existing data for
+        those PRs is replaced with the new data.
+        """
         os.makedirs(RAW_DATA_DIR, exist_ok=True)
+
+        # Get the set of PR numbers we're updating
+        updated_pr_numbers = {pr.pr_number for pr in self.prs}
 
         def to_records(items: list) -> list[dict]:
             return [item.model_dump() for item in items]
 
-        def save_table(items: list, filename: str):
+        def upsert_table(items: list, filename: str, key_column: str = "pr_number"):
+            """Upsert items into a parquet table.
+
+            For pr_number keys: removes all existing rows for PRs being updated.
+            For unique keys (review_id, etc.): removes rows with matching keys.
+            """
             if not items:
                 return
-            path = f"{RAW_DATA_DIR}/{filename}"
-            df = pa.Table.from_pylist(to_records(items))
 
-            # Append to existing or create new
+            path = f"{RAW_DATA_DIR}/{filename}"
+            new_table = pa.Table.from_pylist(to_records(items))
+
             if os.path.exists(path):
                 existing = pq.read_table(path)
-                # Unify schemas by promoting to handle null vs timestamp mismatches
-                try:
-                    df = pa.concat_tables([existing, df], promote_options="default")
-                except Exception as e:
-                    logger.warning(f"Schema mismatch for {filename}, rewriting: {e}")
-                    # If promotion fails, just use new schema (lose old data types)
-                    df = pa.concat_tables([existing.cast(df.schema), df])
 
-            pq.write_table(df, path)
+                if key_column == "pr_number":
+                    # Remove all rows for PRs we're updating
+                    keep_mask = [
+                        pn not in updated_pr_numbers
+                        for pn in existing.column("pr_number").to_pylist()
+                    ]
+                else:
+                    # Remove rows with matching unique keys
+                    new_keys = set(new_table.column(key_column).to_pylist())
+                    keep_mask = [
+                        k not in new_keys
+                        for k in existing.column(key_column).to_pylist()
+                    ]
 
-        save_table(self.prs, "prs.parquet")
-        save_table(self.reviews, "reviews.parquet")
-        save_table(self.pr_comments, "pr_comments.parquet")
-        save_table(self.review_comments, "review_comments.parquet")
-        save_table(self.files, "files.parquet")
-        save_table(self.checks, "checks.parquet")
-        save_table(self.timeline_events, "timeline_events.parquet")
-
-        if self.users:
-            # Users table is a dimension - merge with existing
-            users_path = f"{RAW_DATA_DIR}/users.parquet"
-            new_users = pa.Table.from_pylist(to_records(list(self.users.values())))
-            if os.path.exists(users_path):
-                existing = pq.read_table(users_path)
-                # Merge by user_id, preferring new data
-                existing_ids = set(existing.column("user_id").to_pylist())
-                new_ids = set(new_users.column("user_id").to_pylist())
-                # Keep existing users not in new batch
-                keep_mask = [uid not in new_ids for uid in existing.column("user_id").to_pylist()]
                 if any(keep_mask):
                     existing_to_keep = existing.filter(pa.array(keep_mask))
-                    new_users = pa.concat_tables([existing_to_keep, new_users])
-            pq.write_table(new_users, users_path)
+                    try:
+                        new_table = pa.concat_tables(
+                            [existing_to_keep, new_table], promote_options="default"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Schema mismatch for {filename}: {e}")
+                        new_table = pa.concat_tables([existing_to_keep.cast(new_table.schema), new_table])
+
+            pq.write_table(new_table, path)
+
+        # Tables keyed by pr_number (replace all data for updated PRs)
+        upsert_table(self.prs, "prs.parquet", "pr_number")
+        upsert_table(self.reviews, "reviews.parquet", "pr_number")
+        upsert_table(self.pr_comments, "pr_comments.parquet", "pr_number")
+        upsert_table(self.review_comments, "review_comments.parquet", "pr_number")
+        upsert_table(self.files, "files.parquet", "pr_number")
+        upsert_table(self.checks, "checks.parquet", "pr_number")
+        upsert_table(self.timeline_events, "timeline_events.parquet", "pr_number")
+
+        # Users table - keyed by user_id
+        if self.users:
+            upsert_table(list(self.users.values()), "users.parquet", "user_id")
 
         # Mark pending PRs as processed (now safely on disk)
         self.processed_prs.update(self.pending_prs)
@@ -445,66 +519,83 @@ class DataExtractor:
 
         return table
 
-    def run(self, limit: int | None = None, retry_failed: bool = False):
-        """Run the full extraction with live TUI."""
+    async def run(self, limit: int | None = None, refresh_days: int | None = None):
+        """Run the full extraction with live TUI.
+
+        Args:
+            limit: Max number of PRs to process
+            refresh_days: Re-extract PRs from the last N days even if already processed
+        """
         self.stats.auth_type = self.client.auth_type
         logger.info("=" * 60)
         logger.info(f"Starting extraction: {START_DATE.date()} to {END_DATE.date()}")
-        logger.info(f"Auth type: {self.stats.auth_type}, Limit: {limit}, Retry failed: {retry_failed}")
+        logger.info(f"Auth type: {self.stats.auth_type}, Limit: {limit}, Refresh days: {refresh_days}")
 
         self.console.print(f"[bold]Extracting PRs from {START_DATE.date()} to {END_DATE.date()}[/]")
         self.console.print(f"[dim]Auth: {self.stats.auth_type.upper()}[/]")
 
         # Load checkpoint
-        if self.load_checkpoint():
+        if self.load_checkpoint(refresh_days=refresh_days):
             logger.info(f"Resumed from checkpoint: {len(self.processed_prs)} PRs already processed")
             self.console.print(f"[green]Resumed from checkpoint: {len(self.processed_prs)} PRs already processed[/]")
 
         # Update rate limit info
         try:
-            rate_info = self.client.get_rate_limit()["rate"]
+            rate_info = (await self.client.get_rate_limit())["rate"]
             self.stats.rate_limit_remaining = rate_info["remaining"]
-        except:
+        except Exception:
             pass
 
         # Get all PRs in date range
         self.console.print("\n[bold]Fetching PR list...[/]")
-        pr_numbers = []
+        pr_list: list[dict] = []
 
-        for pr in self.client.get_pull_requests(state="all", since=START_DATE):
+        async for pr in self.client.get_pull_requests(state="all", since=START_DATE):
             pr_created = datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00"))
             if pr_created >= START_DATE:
-                pr_numbers.append(pr["number"])
-            if limit and len(pr_numbers) >= limit:
+                pr_list.append(pr)
+            if limit and len(pr_list) >= limit:
                 break
 
-        # Optionally include failed PRs for retry
-        if retry_failed:
-            failed_to_retry = [n for n in self.failed_prs.keys() if n not in self.processed_prs]
-            pr_numbers = list(set(pr_numbers + failed_to_retry))
+        # Always retry failed PRs automatically
+        failed_to_retry = [n for n in self.failed_prs if n not in self.processed_prs]
+        for pr_num in failed_to_retry:
+            if pr_num not in [p["number"] for p in pr_list]:
+                try:
+                    pr_data = await self.client.get(f"/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_num}")
+                    pr_list.append(pr_data)
+                except Exception as e:
+                    logger.warning(f"Could not fetch failed PR #{pr_num}: {e}")
 
         # Filter out already processed
-        pr_numbers_to_process = [n for n in pr_numbers if n not in self.processed_prs]
-        self.stats.total_prs = len(pr_numbers)
+        prs_to_process = [p for p in pr_list if p["number"] not in self.processed_prs]
+        self.stats.total_prs = len(pr_list)
 
-        self.console.print(f"[green]Found {len(pr_numbers_to_process)} PRs to process ({self.stats.skipped_prs} already done)[/]\n")
+        self.console.print(f"[green]Found {len(prs_to_process)} PRs to process ({self.stats.skipped_prs} already done)[/]\n")
 
-        if not pr_numbers_to_process:
+        if not prs_to_process:
             self.console.print("[yellow]No new PRs to process.[/]")
             return
 
         self.console.print("[dim]Press Ctrl+C to stop (progress is saved)[/]\n")
 
+        # Setup signal handler (works with trio)
+        signal.signal(signal.SIGINT, self._handle_interrupt)
+        signal.signal(signal.SIGTERM, self._handle_interrupt)
+
         # Process with live dashboard
         with Live(self.build_dashboard(), console=self.console, refresh_per_second=2) as live:
-            for i, pr_number in enumerate(pr_numbers_to_process):
+            for i, pr_data in enumerate(prs_to_process):
+                pr_number = pr_data["number"]
+
                 # Check for stop
                 if self._stop_requested:
                     break
 
-                # Extract PR
+                # Extract PR with concurrent API calls
                 try:
-                    self.extract_pr_details(pr_number)
+                    details = await self.extract_pr_details(pr_number, pr_data)
+                    self.merge_details(details, pr_number)
                     logger.debug(f"PR #{pr_number} extracted successfully")
                 except Exception as e:
                     self.stats.failed_prs += 1
@@ -512,7 +603,7 @@ class DataExtractor:
                         pr_number=pr_number,
                         error_type=type(e).__name__,
                         error_message=str(e)[:500],
-                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        timestamp=datetime.now(UTC).isoformat(),
                         retries=self.failed_prs.get(pr_number, ErrorRecord(0, "", "", "")).retries + 1,
                     )
                     self.failed_prs[pr_number] = error_record
@@ -523,9 +614,9 @@ class DataExtractor:
                 # Update rate limit periodically
                 if (i + 1) % 50 == 0:
                     try:
-                        rate_info = self.client.get_rate_limit()["rate"]
+                        rate_info = (await self.client.get_rate_limit())["rate"]
                         self.stats.rate_limit_remaining = rate_info["remaining"]
-                    except:
+                    except Exception:
                         pass
 
                 # Incremental save and checkpoint (parquet first, then checkpoint)
@@ -546,9 +637,9 @@ class DataExtractor:
         logger.info(f"Extraction {status}: {self.stats.processed_prs} processed, {self.stats.failed_prs} failed, {self.stats.api_requests} API requests")
 
         if was_interrupted:
-            self.console.print(f"\n[bold yellow]Extraction stopped - progress saved[/]")
+            self.console.print("\n[bold yellow]Extraction stopped - progress saved[/]")
         else:
-            self.console.print(f"\n[bold green]Extraction complete![/]")
+            self.console.print("\n[bold green]Extraction complete![/]")
 
         self.console.print(f"  Processed: {self.stats.processed_prs} PRs")
         self.console.print(f"  Failed: {self.stats.failed_prs} PRs")
@@ -556,26 +647,25 @@ class DataExtractor:
         self.console.print(f"  Log file: {LOG_FILE}")
 
         if was_interrupted:
-            self.console.print(f"\n[dim]Run again to resume from checkpoint[/]")
+            self.console.print("\n[dim]Run again to resume from checkpoint[/]")
 
         if self.failed_prs:
             self.console.print(f"\n[yellow]Failed PRs logged to {RAW_DATA_DIR}/extraction_errors.json[/]")
-            self.console.print("[dim]Run with --retry-failed to retry them[/]")
+            self.console.print("[dim]Failed PRs will be retried automatically on next run[/]")
 
 
-def main(limit: int | None = None, retry_failed: bool = False):
+async def main(limit: int | None = None, refresh_days: int | None = None):
     """Main entry point."""
     console = Console()
 
-    with GitHubClient() as client:
+    async with GitHubClient() as client:
         extractor = DataExtractor(client, console)
-        extractor.run(limit=limit, retry_failed=retry_failed)
+        await extractor.run(limit=limit, refresh_days=refresh_days)
 
 
 def cli():
     """CLI entry point."""
     import argparse
-    import sys
 
     if not REPO_OWNER or not REPO_NAME:
         print("Error: REPO_OWNER and REPO_NAME must be set in .env")
@@ -586,10 +676,13 @@ def cli():
 
     parser = argparse.ArgumentParser(description="Extract GitHub PR data for code review analysis")
     parser.add_argument("--limit", "-n", type=int, help="Limit number of PRs to process")
-    parser.add_argument("--retry-failed", action="store_true", help="Retry previously failed PRs")
+    parser.add_argument(
+        "--refresh-days", "-r", type=int,
+        help="Re-extract PRs from the last N days (updates existing data)"
+    )
 
     args = parser.parse_args()
-    main(limit=args.limit, retry_failed=args.retry_failed)
+    trio.run(main, args.limit, args.refresh_days)
 
 
 if __name__ == "__main__":

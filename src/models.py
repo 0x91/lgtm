@@ -1,7 +1,7 @@
 """Pydantic models for data validation and Parquet schema."""
 
 from datetime import datetime
-from typing import Optional
+
 from pydantic import BaseModel
 
 
@@ -10,7 +10,7 @@ class PullRequest(BaseModel):
     pr_number: int
     pr_id: int
     title: str
-    body: Optional[str]
+    body: str | None
     author_login: str
     author_id: int
     author_is_bot: bool
@@ -18,8 +18,8 @@ class PullRequest(BaseModel):
     merged: bool
     created_at: datetime
     updated_at: datetime
-    merged_at: Optional[datetime]
-    closed_at: Optional[datetime]
+    merged_at: datetime | None
+    closed_at: datetime | None
     additions: int
     deletions: int
     changed_files: int
@@ -27,7 +27,7 @@ class PullRequest(BaseModel):
     comments_count: int
     review_comments_count: int
     draft: bool
-    merge_commit_sha: Optional[str]
+    merge_commit_sha: str | None
 
 
 class Review(BaseModel):
@@ -38,7 +38,7 @@ class Review(BaseModel):
     reviewer_id: int
     reviewer_is_bot: bool
     state: str
-    body: Optional[str]
+    body: str | None
     submitted_at: datetime
     commit_id: str
 
@@ -64,7 +64,7 @@ class ReviewComment(BaseModel):
     author_is_bot: bool
     body: str
     path: str
-    line: Optional[int]
+    line: int | None
     created_at: datetime
     updated_at: datetime
     is_resolved: bool
@@ -88,17 +88,17 @@ class CheckRun(BaseModel):
     pr_number: int
     name: str
     status: str
-    conclusion: Optional[str]
-    started_at: Optional[datetime]
-    completed_at: Optional[datetime]
-    duration_seconds: Optional[int]
+    conclusion: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    duration_seconds: int | None
 
 
 class TimelineEvent(BaseModel):
     """PR timeline event."""
     pr_number: int
     event_type: str
-    actor_login: Optional[str]
+    actor_login: str | None
     created_at: datetime
 
 
@@ -107,4 +107,4 @@ class User(BaseModel):
     user_id: int
     login: str
     is_bot: bool
-    bot_name: Optional[str]
+    bot_name: str | None

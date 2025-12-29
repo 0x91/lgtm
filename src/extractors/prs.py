@@ -1,7 +1,6 @@
 """Pull request data extractor."""
 
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import datetime
 
 from ..config import KNOWN_BOTS
 from ..models import PullRequest
@@ -12,12 +11,12 @@ def is_bot(user: dict) -> bool:
     return user.get("type") == "Bot" or user.get("login", "").endswith("[bot]")
 
 
-def get_bot_name(login: str) -> Optional[str]:
+def get_bot_name(login: str) -> str | None:
     """Extract bot name from login."""
     return KNOWN_BOTS.get(login)
 
 
-def parse_datetime(dt_str: Optional[str]) -> Optional[datetime]:
+def parse_datetime(dt_str: str | None) -> datetime | None:
     """Parse ISO datetime string, returns None if input is empty."""
     if not dt_str:
         return None

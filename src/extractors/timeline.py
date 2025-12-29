@@ -1,10 +1,8 @@
 """PR timeline events extractor."""
 
-from typing import Optional
 
 from ..models import TimelineEvent
 from .prs import parse_datetime_required
-
 
 # Timeline events we care about
 RELEVANT_EVENTS = {
@@ -21,7 +19,7 @@ RELEVANT_EVENTS = {
 }
 
 
-def extract_timeline_event(pr_number: int, event_data: dict) -> Optional[TimelineEvent]:
+def extract_timeline_event(pr_number: int, event_data: dict) -> TimelineEvent | None:
     """Extract timeline event from GitHub API response.
 
     Returns None for events we don't care about.

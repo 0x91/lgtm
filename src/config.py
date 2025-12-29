@@ -1,7 +1,8 @@
 """Configuration for GitHub data extraction."""
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,8 +21,8 @@ GITHUB_APP_INSTALLATION_ID = os.environ.get("GITHUB_APP_INSTALLATION_ID")
 
 # Date range (START_DATE as ISO string, e.g., "2025-01-01")
 _start = os.environ.get("START_DATE", "2025-01-01")
-START_DATE = datetime.fromisoformat(_start).replace(tzinfo=timezone.utc)
-END_DATE = datetime.now(timezone.utc)
+START_DATE = datetime.fromisoformat(_start).replace(tzinfo=UTC)
+END_DATE = datetime.now(UTC)
 
 # Paths
 DATA_DIR = "data"

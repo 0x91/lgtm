@@ -1,24 +1,29 @@
-"""GitHub API client with rate limiting, retry logic, and App auth support."""
+"""GitHub API client with rate limiting, retry logic, and App auth support.
+
+Uses httpx.AsyncClient with trio for concurrent requests.
+"""
 
 import logging
 import time
-from datetime import datetime, timezone, timedelta
-from typing import Any, Generator, Optional
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 import jwt
-
-logger = logging.getLogger(__name__)
+import trio
 
 from .config import (
-    GITHUB_TOKEN,
     GITHUB_APP_ID,
-    GITHUB_APP_PRIVATE_KEY_PATH,
     GITHUB_APP_INSTALLATION_ID,
+    GITHUB_APP_PRIVATE_KEY_PATH,
+    GITHUB_TOKEN,
     PER_PAGE,
-    REPO_OWNER,
     REPO_NAME,
+    REPO_OWNER,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class GitHubAppAuth:
@@ -32,12 +37,12 @@ class GitHubAppAuth:
         with open(private_key_path) as f:
             self.private_key = f.read()
 
-        self._token: Optional[str] = None
-        self._token_expires_at: Optional[datetime] = None
+        self._token: str | None = None
+        self._token_expires_at: datetime | None = None
 
     def _generate_jwt(self) -> str:
         """Generate a JWT for GitHub App authentication."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         payload = {
             "iat": int(now.timestamp()) - 60,  # Issued 60s ago (clock skew)
             "exp": int((now + timedelta(minutes=10)).timestamp()),  # Expires in 10 min
@@ -45,20 +50,21 @@ class GitHubAppAuth:
         }
         return jwt.encode(payload, self.private_key, algorithm="RS256")
 
-    def _fetch_installation_token(self) -> tuple[str, datetime]:
+    async def _fetch_installation_token(self) -> tuple[str, datetime]:
         """Exchange JWT for an installation access token."""
         jwt_token = self._generate_jwt()
 
-        response = httpx.post(
-            f"https://api.github.com/app/installations/{self.installation_id}/access_tokens",
-            headers={
-                "Authorization": f"Bearer {jwt_token}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-            timeout=30.0,
-        )
-        response.raise_for_status()
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"https://api.github.com/app/installations/{self.installation_id}/access_tokens",
+                headers={
+                    "Authorization": f"Bearer {jwt_token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                timeout=30.0,
+            )
+            response.raise_for_status()
 
         data = response.json()
         token = data["token"]
@@ -66,9 +72,9 @@ class GitHubAppAuth:
 
         return token, expires_at
 
-    def get_token(self) -> str:
+    async def get_token(self) -> str:
         """Get a valid installation token, refreshing if needed."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Refresh if no token or expires in less than 5 minutes
         if (
@@ -76,17 +82,17 @@ class GitHubAppAuth:
             or self._token_expires_at is None
             or self._token_expires_at <= now + timedelta(minutes=5)
         ):
-            self._token, self._token_expires_at = self._fetch_installation_token()
+            self._token, self._token_expires_at = await self._fetch_installation_token()
 
         return self._token
 
     @property
-    def token_expires_at(self) -> Optional[datetime]:
+    def token_expires_at(self) -> datetime | None:
         return self._token_expires_at
 
 
 class GitHubClient:
-    """GitHub REST API client with automatic rate limit handling.
+    """Async GitHub REST API client with automatic rate limit handling.
 
     Supports both PAT and GitHub App authentication.
     GitHub App auth provides higher rate limits (15,000+ req/hr vs 5,000).
@@ -96,8 +102,8 @@ class GitHubClient:
 
     def __init__(
         self,
-        token: Optional[str] = None,
-        app_auth: Optional[GitHubAppAuth] = None,
+        token: str | None = None,
+        app_auth: GitHubAppAuth | None = None,
     ):
         """Initialize the client.
 
@@ -129,32 +135,41 @@ class GitHubClient:
                 )
 
         self._auth_type = "app" if self.app_auth else "pat"
-        self.client = httpx.Client(
+        self.client: httpx.AsyncClient | None = None
+        self._request_count = 0
+
+    async def __aenter__(self):
+        self.client = httpx.AsyncClient(
             base_url=self.BASE_URL,
             headers={
                 "Accept": "application/vnd.github+json",
                 "X-GitHub-Api-Version": "2022-11-28",
             },
             timeout=30.0,
+            http2=True,
         )
-        self._request_count = 0
+        return self
+
+    async def __aexit__(self, *args):
+        if self.client:
+            await self.client.aclose()
 
     @property
     def auth_type(self) -> str:
         """Return the authentication type being used."""
         return self._auth_type
 
-    def _get_auth_header(self) -> str:
+    async def _get_auth_header(self) -> str:
         """Get the current auth header value."""
         if self.app_auth:
-            return f"Bearer {self.app_auth.get_token()}"
+            return f"Bearer {await self.app_auth.get_token()}"
         return f"Bearer {self.pat_token}"
 
     @property
     def request_count(self) -> int:
         return self._request_count
 
-    def _handle_rate_limit(self, response: httpx.Response) -> bool:
+    async def _handle_rate_limit(self, response: httpx.Response) -> bool:
         """Handle rate limiting. Returns True if request should be retried."""
         if response.status_code == 403:
             remaining = int(response.headers.get("X-RateLimit-Remaining", 1))
@@ -163,40 +178,47 @@ class GitHubClient:
                 wait_seconds = max(reset_time - time.time(), 60)
                 logger.warning(f"Rate limited (primary). Waiting {wait_seconds:.0f}s until reset...")
                 print(f"\nRate limited. Waiting {wait_seconds:.0f}s until reset...")
-                time.sleep(wait_seconds + 1)
+                await trio.sleep(wait_seconds + 1)
                 return True
 
         if response.status_code == 429:
             retry_after = int(response.headers.get("Retry-After", 60))
             logger.warning(f"Rate limited (secondary). Waiting {retry_after}s...")
             print(f"\nSecondary rate limit. Waiting {retry_after}s...")
-            time.sleep(retry_after)
+            await trio.sleep(retry_after)
             return True
 
         return False
 
-    def _request(
+    async def _request(
         self,
         method: str,
         path: str,
-        params: Optional[dict] = None,
+        params: dict | None = None,
+        headers: dict | None = None,
         max_retries: int = 3,
     ) -> httpx.Response:
         """Make request with automatic rate limit handling and token refresh."""
-        for attempt in range(max_retries):
-            # Update auth header (may refresh App token)
-            self.client.headers["Authorization"] = self._get_auth_header()
+        if not self.client:
+            raise RuntimeError("Client not initialized. Use async context manager.")
 
-            response = self.client.request(method, path, params=params)
+        request_headers = {"Authorization": await self._get_auth_header()}
+        if headers:
+            request_headers.update(headers)
+
+        for attempt in range(max_retries):
+            response = await self.client.request(
+                method, path, params=params, headers=request_headers
+            )
             self._request_count += 1
 
-            if self._handle_rate_limit(response):
+            if await self._handle_rate_limit(response):
                 continue
 
             if response.status_code >= 500:
                 wait = 2**attempt
                 print(f"\nServer error {response.status_code}. Retrying in {wait}s...")
-                time.sleep(wait)
+                await trio.sleep(wait)
                 continue
 
             response.raise_for_status()
@@ -204,25 +226,26 @@ class GitHubClient:
 
         raise Exception(f"Max retries exceeded for {path}")
 
-    def get(self, path: str, params: Optional[dict] = None) -> Any:
+    async def get(self, path: str, params: dict | None = None, headers: dict | None = None) -> Any:
         """GET request returning JSON."""
-        response = self._request("GET", path, params=params)
+        response = await self._request("GET", path, params=params, headers=headers)
         return response.json()
 
-    def paginate(
+    async def paginate(
         self,
         path: str,
-        params: Optional[dict] = None,
-        max_pages: Optional[int] = None,
-    ) -> Generator[Any, None, None]:
+        params: dict | None = None,
+        headers: dict | None = None,
+        max_pages: int | None = None,
+    ) -> AsyncGenerator[Any]:
         """Paginate through results, yielding each item."""
-        params = params or {}
+        params = params.copy() if params else {}
         params["per_page"] = PER_PAGE
         page = 1
 
         while True:
             params["page"] = page
-            response = self._request("GET", path, params=params)
+            response = await self._request("GET", path, params=params, headers=headers)
             items = response.json()
 
             if not items:
@@ -239,78 +262,76 @@ class GitHubClient:
 
             page += 1
 
-    def get_pull_requests(
+    async def paginate_all(
+        self,
+        path: str,
+        params: dict | None = None,
+        headers: dict | None = None,
+    ) -> list[dict]:
+        """Paginate through all results, returning a list."""
+        results = []
+        async for item in self.paginate(path, params, headers):
+            results.append(item)
+        return results
+
+    async def get_pull_requests(
         self,
         state: str = "all",
         sort: str = "created",
-        direction: str = "desc",
-        since: Optional[datetime] = None,
-    ) -> Generator[dict, None, None]:
-        """Get all pull requests."""
+        direction: str = "asc",
+        since: datetime | None = None,
+    ) -> AsyncGenerator[dict]:
+        """Get all pull requests, oldest first by default."""
         path = f"/repos/{REPO_OWNER}/{REPO_NAME}/pulls"
         params = {"state": state, "sort": sort, "direction": direction}
 
-        for pr in self.paginate(path, params):
+        async for pr in self.paginate(path, params):
             pr_created = datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00"))
 
-            # Stop if we've gone past our date range
+            # Skip PRs before our start date (when going oldest first)
             if since and pr_created < since:
-                return
+                continue
 
             yield pr
 
-    def get_pr_reviews(self, pr_number: int) -> list[dict]:
+    async def get_pr_reviews(self, pr_number: int) -> list[dict]:
         """Get all reviews for a PR."""
         path = f"/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}/reviews"
-        return list(self.paginate(path))
+        return await self.paginate_all(path)
 
-    def get_pr_comments(self, pr_number: int) -> list[dict]:
+    async def get_pr_comments(self, pr_number: int) -> list[dict]:
         """Get PR-level comments (issue comments)."""
         path = f"/repos/{REPO_OWNER}/{REPO_NAME}/issues/{pr_number}/comments"
-        return list(self.paginate(path))
+        return await self.paginate_all(path)
 
-    def get_pr_review_comments(self, pr_number: int) -> list[dict]:
+    async def get_pr_review_comments(self, pr_number: int) -> list[dict]:
         """Get inline code review comments."""
         path = f"/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}/comments"
-        return list(self.paginate(path))
+        return await self.paginate_all(path)
 
-    def get_pr_files(self, pr_number: int) -> list[dict]:
+    async def get_pr_files(self, pr_number: int) -> list[dict]:
         """Get files changed in a PR."""
         path = f"/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}/files"
-        return list(self.paginate(path))
+        return await self.paginate_all(path)
 
-    def get_pr_commits(self, pr_number: int) -> list[dict]:
+    async def get_pr_commits(self, pr_number: int) -> list[dict]:
         """Get commits in a PR."""
         path = f"/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}/commits"
-        return list(self.paginate(path))
+        return await self.paginate_all(path)
 
-    def get_check_runs(self, ref: str) -> list[dict]:
+    async def get_check_runs(self, ref: str) -> list[dict]:
         """Get check runs for a commit ref."""
         path = f"/repos/{REPO_OWNER}/{REPO_NAME}/commits/{ref}/check-runs"
-        response = self.get(path)
+        response = await self.get(path)
         return response.get("check_runs", [])
 
-    def get_pr_timeline(self, pr_number: int) -> list[dict]:
+    async def get_pr_timeline(self, pr_number: int) -> list[dict]:
         """Get timeline events for a PR."""
         path = f"/repos/{REPO_OWNER}/{REPO_NAME}/issues/{pr_number}/timeline"
         # Timeline API requires special accept header
-        original_accept = self.client.headers["Accept"]
-        self.client.headers["Accept"] = "application/vnd.github.mockingbird-preview+json"
-        try:
-            return list(self.paginate(path))
-        finally:
-            self.client.headers["Accept"] = original_accept
+        headers = {"Accept": "application/vnd.github.mockingbird-preview+json"}
+        return await self.paginate_all(path, headers=headers)
 
-    def get_rate_limit(self) -> dict:
+    async def get_rate_limit(self) -> dict:
         """Get current rate limit status."""
-        return self.get("/rate_limit")
-
-    def close(self):
-        """Close the HTTP client."""
-        self.client.close()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        self.close()
+        return await self.get("/rate_limit")

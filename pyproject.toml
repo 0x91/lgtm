@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "Meta-analysis of code review patterns"
 requires-python = ">=3.14"
 dependencies = [
-    "httpx>=0.27.0",
+    "httpx[http2]>=0.27.0",
+    "trio>=0.27.0",
     "pyarrow>=18.0.0",
     "tqdm>=4.66.0",
     "pydantic>=2.0.0",
@@ -26,7 +27,7 @@ analysis = [
 ]
 dev = [
     "pytest>=8.0.0",
-    "pytest-asyncio>=0.24.0",
+    "pytest-trio>=0.8.0",
     "respx>=0.22.0",
     "ruff>=0.8.0",
     "ty>=0.0.1a10",
@@ -49,8 +50,12 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "function"
+trio_mode = true
 
 [tool.ty.environment]
 root = [".", "./src"]
+
+[dependency-groups]
+dev = [
+    "pytest-cov>=7.0.0",
+]

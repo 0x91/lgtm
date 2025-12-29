@@ -2,12 +2,12 @@
 
 import pytest
 
-from src.github_client import GitHubClient
-
 
 @pytest.fixture
-def github_client():
-    """Create a GitHubClient with a fake PAT token."""
-    client = GitHubClient(token="fake-token")
-    yield client
-    client.close()
+def github_client_uninit():
+    """Create an uninitialized GitHubClient with a fake PAT token.
+
+    Use this for sync tests that don't need the async context manager.
+    """
+    from src.github_client import GitHubClient
+    return GitHubClient(token="fake-token")

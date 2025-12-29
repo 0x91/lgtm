@@ -1,6 +1,5 @@
 """User dimension extractor."""
 
-from typing import Optional
 
 from ..config import KNOWN_BOTS
 from ..models import User
@@ -12,7 +11,7 @@ def extract_user(user_data: dict) -> User:
     login = user_data.get("login", "unknown")
     user_is_bot = is_bot(user_data)
 
-    bot_name: Optional[str] = None
+    bot_name: str | None = None
     if user_is_bot:
         bot_name = KNOWN_BOTS.get(login)
         if not bot_name and login.endswith("[bot]"):
