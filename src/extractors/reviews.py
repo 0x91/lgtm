@@ -1,7 +1,7 @@
 """PR review data extractor."""
 
 from ..models import Review
-from .prs import is_bot, parse_datetime
+from .prs import is_bot, parse_datetime_required
 
 
 def extract_review(pr_number: int, review_data: dict) -> Review:
@@ -16,6 +16,6 @@ def extract_review(pr_number: int, review_data: dict) -> Review:
         reviewer_is_bot=is_bot(user),
         state=review_data["state"],
         body=review_data.get("body"),
-        submitted_at=parse_datetime(review_data["submitted_at"]),
+        submitted_at=parse_datetime_required(review_data["submitted_at"]),
         commit_id=review_data.get("commit_id", ""),
     )

@@ -31,8 +31,9 @@ class TestGitHubClient:
         assert len(results) == 3
 
     @respx.mock
-    def test_rate_limit_handling(self, github_client):
+    def test_rate_limit_handling(self, github_client, monkeypatch):
         import time
+        monkeypatch.setattr("src.github_client.time.sleep", lambda _: None)
         respx.get("https://api.github.com/test").mock(
             side_effect=[
                 httpx.Response(403, json={"message": "rate limit"}, headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(time.time()) + 1)}),
@@ -43,7 +44,8 @@ class TestGitHubClient:
         assert result["ok"] is True
 
     @respx.mock
-    def test_server_error_retry(self, github_client):
+    def test_server_error_retry(self, github_client, monkeypatch):
+        monkeypatch.setattr("src.github_client.time.sleep", lambda _: None)
         respx.get("https://api.github.com/flaky").mock(
             side_effect=[
                 httpx.Response(502, text="Bad Gateway"),

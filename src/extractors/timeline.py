@@ -3,7 +3,7 @@
 from typing import Optional
 
 from ..models import TimelineEvent
-from .prs import parse_datetime
+from .prs import parse_datetime_required
 
 
 # Timeline events we care about
@@ -49,5 +49,5 @@ def extract_timeline_event(pr_number: int, event_data: dict) -> Optional[Timelin
         pr_number=pr_number,
         event_type=event_type,
         actor_login=actor_login,
-        created_at=parse_datetime(created_at),
+        created_at=parse_datetime_required(created_at),
     )

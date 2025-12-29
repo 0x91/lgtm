@@ -18,9 +18,16 @@ def get_bot_name(login: str) -> Optional[str]:
 
 
 def parse_datetime(dt_str: Optional[str]) -> Optional[datetime]:
-    """Parse ISO datetime string."""
+    """Parse ISO datetime string, returns None if input is empty."""
     if not dt_str:
         return None
+    return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+
+
+def parse_datetime_required(dt_str: str) -> datetime:
+    """Parse ISO datetime string, raises if input is empty."""
+    if not dt_str:
+        raise ValueError("datetime string is required")
     return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
 
 
@@ -38,8 +45,8 @@ def extract_pr(pr_data: dict) -> PullRequest:
         author_is_bot=is_bot(user),
         state=pr_data["state"],
         merged=pr_data.get("merged", False) or pr_data.get("merged_at") is not None,
-        created_at=parse_datetime(pr_data["created_at"]),
-        updated_at=parse_datetime(pr_data["updated_at"]),
+        created_at=parse_datetime_required(pr_data["created_at"]),
+        updated_at=parse_datetime_required(pr_data["updated_at"]),
         merged_at=parse_datetime(pr_data.get("merged_at")),
         closed_at=parse_datetime(pr_data.get("closed_at")),
         additions=pr_data.get("additions", 0),

@@ -1,7 +1,7 @@
 """Comment data extractors (PR comments and review comments)."""
 
 from ..models import PRComment, ReviewComment
-from .prs import is_bot, parse_datetime
+from .prs import is_bot, parse_datetime_required
 
 
 def extract_pr_comment(pr_number: int, comment_data: dict) -> PRComment:
@@ -16,8 +16,8 @@ def extract_pr_comment(pr_number: int, comment_data: dict) -> PRComment:
         author_id=user.get("id", 0),
         author_is_bot=is_bot(user),
         body=comment_data.get("body", ""),
-        created_at=parse_datetime(comment_data["created_at"]),
-        updated_at=parse_datetime(comment_data["updated_at"]),
+        created_at=parse_datetime_required(comment_data["created_at"]),
+        updated_at=parse_datetime_required(comment_data["updated_at"]),
         reactions_total=reactions.get("total_count", 0),
     )
 
@@ -34,8 +34,8 @@ def extract_review_comment(pr_number: int, comment_data: dict) -> ReviewComment:
         body=comment_data.get("body", ""),
         path=comment_data.get("path", ""),
         line=comment_data.get("line") or comment_data.get("original_line"),
-        created_at=parse_datetime(comment_data["created_at"]),
-        updated_at=parse_datetime(comment_data["updated_at"]),
+        created_at=parse_datetime_required(comment_data["created_at"]),
+        updated_at=parse_datetime_required(comment_data["updated_at"]),
         # These aren't directly in REST API, set defaults
         is_resolved=False,
         is_outdated=comment_data.get("position") is None,

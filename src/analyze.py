@@ -217,7 +217,8 @@ def main() -> None:
     print("LGTM: Code Review Analysis Report")
     print("=" * 60)
 
-    total_prs = con.execute("SELECT COUNT(*) FROM prs").fetchone()[0]
+    result = con.execute("SELECT COUNT(*) FROM prs").fetchone()
+    total_prs = result[0] if result else 0
     print(f"\nTotal PRs analyzed: {total_prs:,}")
 
     rubber_stamp_rate(con)
