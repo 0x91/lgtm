@@ -452,13 +452,21 @@ def print_header(stats: dict) -> None:
 
 def print_short_answer(approval_ctx: dict, quick_large: list[dict]) -> None:
     """Print the short answer section."""
-    console.print("\n[bold]## The Short Answer[/bold]\n")
+    console.print("\n[bold cyan]## The Short Answer[/bold cyan]\n")
 
     total = approval_ctx.get("total_approvals", 0)
     empty = approval_ctx.get("empty_approvals", 0)
     empty_pct = 100.0 * empty / total if total else 0
 
-    console.print(f"[bold]{format_pct(empty_pct)}[/bold] of approvals have no comment or feedback. But context matters:")
+    # Color based on severity
+    if empty_pct > 70:
+        pct_color = "bold red"
+    elif empty_pct > 50:
+        pct_color = "bold yellow"
+    else:
+        pct_color = "bold green"
+
+    console.print(f"[{pct_color}]{format_pct(empty_pct)}[/{pct_color}] of approvals have no comment or feedback. But context matters:")
     console.print()
 
     # Expert context
@@ -494,7 +502,7 @@ def print_short_answer(approval_ctx: dict, quick_large: list[dict]) -> None:
 def print_review_depth(depth_data: list[dict]) -> None:
     """Print review depth by PR type."""
     console.print("\n[dim]" + "\u2500" * 70 + "[/dim]")
-    console.print("\n[bold]## Review Depth by Risk[/bold]")
+    console.print("\n[bold cyan]## Review Depth by Risk[/bold cyan]")
     console.print("[dim]Are we spending effort where it matters?[/dim]\n")
 
     table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
@@ -539,7 +547,7 @@ def print_review_depth(depth_data: list[dict]) -> None:
 def print_module_ownership(module_data: list[dict]) -> None:
     """Print module ownership analysis."""
     console.print("\n[dim]" + "\u2500" * 70 + "[/dim]")
-    console.print("\n[bold]## Who's Actually Reviewing?[/bold]")
+    console.print("\n[bold cyan]## Who's Actually Reviewing?[/bold cyan]")
     console.print("[dim]Are experts reviewing their areas?[/dim]\n")
 
     # Sort modules by total activity (sum of top reviewers' prs)
@@ -585,7 +593,7 @@ def print_red_flags(flags: list[dict]) -> None:
         return
 
     console.print("\n[dim]" + "\u2500" * 70 + "[/dim]")
-    console.print("\n[bold]## Red Flags[/bold]")
+    console.print("\n[bold red]## Red Flags[/bold red]")
     console.print("[dim]PRs that might have slipped through:[/dim]\n")
 
     table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
