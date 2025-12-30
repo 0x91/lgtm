@@ -1,5 +1,6 @@
 # Data
 data/
+lgtm.yaml
 
 # Environment
 .env
@@ -19,6 +20,7 @@ build/
 .vscode/
 *.swp
 *.swo
+*.tmp
 
 # OS
 .DS_Store

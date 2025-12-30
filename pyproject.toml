@@ -14,11 +14,12 @@ dependencies = [
     "polars>=1.36.1",
     "rich>=14.2.0",
     "pyjwt[crypto]>=2.10.1",
+    "pyyaml>=6.0.3",
+    "tomli ; python_full_version < '3.11'",
 ]
 
 [project.scripts]
-extract = "src.main:cli"
-analyze = "src.analyze:main"
+lgtm = "src.cli.lgtm:main"
 
 [project.optional-dependencies]
 analysis = [

@@ -5,6 +5,7 @@ import duckdb
 
 from src.analyze import (
     get_connection,
+    # Core metrics
     rubber_stamp_rate,
     time_to_review,
     review_coverage,
@@ -13,7 +14,31 @@ from src.analyze import (
     bot_activity,
     module_coverage,
     pr_size_vs_review,
+    # Review quality
+    review_depth,
+    review_iterations,
+    stale_approvals,
+    drive_by_reviews,
+    self_review_activity,
+    # Temporal patterns
+    review_by_time,
+    review_latency_by_author,
+    review_latency_by_module,
+    time_in_review,
+    # Team dynamics
+    review_reciprocity,
+    reviewer_load_balance,
+    # Risk indicators
+    large_pr_no_comments,
+    quick_approve_large_pr,
+    single_reviewer_merges,
+    # Code review quality
+    code_review_depth,
+    pr_type_review_depth,
+    conventional_commits,
+    underreviewed_code,
 )
+from src.module_config import ModuleConfig
 
 
 @pytest.fixture
@@ -21,13 +46,18 @@ def mock_db():
     """Create in-memory DuckDB with minimal test data."""
     con = duckdb.connect()
 
+    # Register UDFs
+    config = ModuleConfig.default()
+    con.create_function("module", config.extract_module, [str], str)
+    con.create_function("is_generated", config.is_generated, [str], bool)
+
     # Minimal prs table
     con.execute("""
         CREATE TABLE prs AS SELECT * FROM (VALUES
-            (1, 1001, 'test', 'alice', 1, false, 'closed', true, 10, 5, 2, TIMESTAMP '2025-01-01 10:00:00', TIMESTAMP '2025-01-01 12:00:00'),
-            (2, 1002, 'test2', 'bob', 2, false, 'closed', true, 50, 20, 5, TIMESTAMP '2025-01-02 10:00:00', TIMESTAMP '2025-01-02 14:00:00'),
-            (3, 1003, 'bot pr', 'bot[bot]', 3, true, 'closed', true, 5, 0, 1, TIMESTAMP '2025-01-03 10:00:00', TIMESTAMP '2025-01-03 10:30:00')
-        ) AS t(pr_number, pr_id, title, author_login, author_id, author_is_bot, state, merged, additions, deletions, changed_files, created_at, updated_at)
+            (1, 1001, 'test', 'alice', 1, false, 'closed', true, 10, 5, 2, TIMESTAMP '2025-01-01 10:00:00', TIMESTAMP '2025-01-01 12:00:00', TIMESTAMP '2025-01-01 11:30:00'),
+            (2, 1002, 'test2', 'bob', 2, false, 'closed', true, 50, 20, 5, TIMESTAMP '2025-01-02 10:00:00', TIMESTAMP '2025-01-02 14:00:00', TIMESTAMP '2025-01-02 13:00:00'),
+            (3, 1003, 'bot pr', 'bot[bot]', 3, true, 'closed', true, 5, 0, 1, TIMESTAMP '2025-01-03 10:00:00', TIMESTAMP '2025-01-03 10:30:00', TIMESTAMP '2025-01-03 10:20:00')
+        ) AS t(pr_number, pr_id, title, author_login, author_id, author_is_bot, state, merged, additions, deletions, changed_files, created_at, updated_at, merged_at)
     """)
 
     # Minimal reviews table
@@ -48,14 +78,15 @@ def mock_db():
         ) AS t(comment_id, pr_number, author_login, author_id, author_is_bot, body, path, line)
     """)
 
-    # Minimal files table
+    # Minimal files table with computed columns
     con.execute("""
         CREATE TABLE files AS SELECT * FROM (VALUES
-            (1, 'src/main.py', 'modified', 5, 2, 7, 'src'),
-            (1, 'src/util.py', 'added', 10, 0, 10, 'src'),
-            (2, 'backend/api.py', 'modified', 30, 15, 45, 'backend'),
-            (3, 'config.yaml', 'modified', 1, 0, 1, 'config.yaml')
-        ) AS t(pr_number, filename, status, additions, deletions, changes, module)
+            (1, 'src/main.py', 'modified', 5, 2, 7, 'src', 'src/main.py', false),
+            (1, 'src/util.py', 'added', 10, 0, 10, 'src', 'src/util.py', false),
+            (2, 'backend/api.py', 'modified', 30, 15, 45, 'backend', 'backend/api.py', false),
+            (3, 'config.yaml', 'modified', 1, 0, 1, 'config.yaml', 'root', false),
+            (1, 'package-lock.json', 'modified', 100, 50, 150, 'root', 'root', true)
+        ) AS t(pr_number, filename, status, additions, deletions, changes, module, computed_module, is_gen)
     """)
 
     # Minimal users table
@@ -141,6 +172,119 @@ class TestAnalysisQueries:
         pr_size_vs_review(mock_db)
         captured = capsys.readouterr()
         assert "Size" in captured.out
+
+    # Review quality metrics
+    def test_review_depth(self, mock_db, capsys):
+        """review_depth runs without error."""
+        review_depth(mock_db)
+        captured = capsys.readouterr()
+        assert "Review Depth" in captured.out
+
+    def test_review_iterations(self, mock_db, capsys):
+        """review_iterations runs without error."""
+        review_iterations(mock_db)
+        captured = capsys.readouterr()
+        assert "Iterations" in captured.out
+
+    def test_stale_approvals(self, mock_db, capsys):
+        """stale_approvals runs without error."""
+        stale_approvals(mock_db)
+        captured = capsys.readouterr()
+        assert "Stale" in captured.out
+
+    def test_drive_by_reviews(self, mock_db, capsys):
+        """drive_by_reviews runs without error."""
+        drive_by_reviews(mock_db)
+        captured = capsys.readouterr()
+        assert "Drive-by" in captured.out
+
+    def test_self_review_activity(self, mock_db, capsys):
+        """self_review_activity runs without error."""
+        self_review_activity(mock_db)
+        captured = capsys.readouterr()
+        assert "Self-Review" in captured.out
+
+    # Temporal patterns
+    def test_review_by_time(self, mock_db, capsys):
+        """review_by_time runs without error."""
+        review_by_time(mock_db)
+        captured = capsys.readouterr()
+        assert "Day of Week" in captured.out
+
+    def test_review_latency_by_author(self, mock_db, capsys):
+        """review_latency_by_author runs without error."""
+        review_latency_by_author(mock_db)
+        captured = capsys.readouterr()
+        assert "Latency" in captured.out
+
+    def test_review_latency_by_module(self, mock_db, capsys):
+        """review_latency_by_module runs without error."""
+        review_latency_by_module(mock_db)
+        captured = capsys.readouterr()
+        assert "Latency" in captured.out
+
+    def test_time_in_review(self, mock_db, capsys):
+        """time_in_review runs without error."""
+        time_in_review(mock_db)
+        captured = capsys.readouterr()
+        assert "Time in Review" in captured.out
+
+    # Team dynamics
+    def test_review_reciprocity(self, mock_db, capsys):
+        """review_reciprocity runs without error."""
+        review_reciprocity(mock_db)
+        captured = capsys.readouterr()
+        assert "Reciprocity" in captured.out
+
+    def test_reviewer_load_balance(self, mock_db, capsys):
+        """reviewer_load_balance runs without error."""
+        reviewer_load_balance(mock_db)
+        captured = capsys.readouterr()
+        assert "Load Balance" in captured.out
+
+    # Risk indicators
+    def test_large_pr_no_comments(self, mock_db, capsys):
+        """large_pr_no_comments runs without error."""
+        large_pr_no_comments(mock_db)
+        captured = capsys.readouterr()
+        assert "Large PRs" in captured.out
+
+    def test_quick_approve_large_pr(self, mock_db, capsys):
+        """quick_approve_large_pr runs without error."""
+        quick_approve_large_pr(mock_db)
+        captured = capsys.readouterr()
+        assert "Quick Approvals" in captured.out
+
+    def test_single_reviewer_merges(self, mock_db, capsys):
+        """single_reviewer_merges runs without error."""
+        single_reviewer_merges(mock_db)
+        captured = capsys.readouterr()
+        assert "Single Reviewer" in captured.out
+
+    # Code review quality
+    def test_code_review_depth(self, mock_db, capsys):
+        """code_review_depth runs without error."""
+        code_review_depth(mock_db)
+        captured = capsys.readouterr()
+        assert "Review Depth" in captured.out
+
+    def test_pr_type_review_depth(self, mock_db, capsys):
+        """pr_type_review_depth runs without error."""
+        pr_type_review_depth(mock_db)
+        captured = capsys.readouterr()
+        assert "PR Type" in captured.out
+
+    def test_conventional_commits(self, mock_db, capsys):
+        """conventional_commits runs without error."""
+        conventional_commits(mock_db)
+        captured = capsys.readouterr()
+        assert "Conventional" in captured.out
+
+    def test_underreviewed_code(self, mock_db, capsys):
+        """underreviewed_code runs without error."""
+        underreviewed_code(mock_db)
+        captured = capsys.readouterr()
+        assert "Large Code PRs" in captured.out
 
 
 class TestQueryResults:

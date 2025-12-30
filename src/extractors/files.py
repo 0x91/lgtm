@@ -1,41 +1,29 @@
-"""File changes extractor with module detection."""
+"""File changes extractor with configurable module detection."""
 
 from ..models import FileChange
+from ..module_config import ModuleConfig
+
+# Module-level config instance (singleton pattern)
+_config: ModuleConfig | None = None
+
+
+def get_module_config() -> ModuleConfig:
+    """Get or create the module config singleton."""
+    global _config
+    if _config is None:
+        _config = ModuleConfig.load()
+    return _config
+
+
+def set_module_config(config: ModuleConfig) -> None:
+    """Set the module config (for testing or custom configs)."""
+    global _config
+    _config = config
 
 
 def extract_module(path: str) -> str:
-    """Extract module from file path based on repo structure.
-
-    Module structure:
-    - backend/{lang}/{module}/... -> backend/{lang}/{module}
-    - frontend/{lang}/{module}/... -> frontend/{lang}/{module}
-    - app-runtime/{lang}/{module}/... -> app-runtime/{lang}/{module}
-    - proto/{module}/... -> proto/{module}
-    - charts/{module}/... -> charts/{module}
-    - frontend-packages/{module}/... -> frontend-packages/{module}
-    - shared-packages/{module}/... -> shared-packages/{module}
-    """
-    parts = path.split("/")
-
-    if not parts:
-        return "root"
-
-    # Top-level directories with language subdirs
-    if parts[0] in ("backend", "frontend", "app-runtime"):
-        if len(parts) >= 3:
-            return "/".join(parts[:3])
-        elif len(parts) >= 2:
-            return "/".join(parts[:2])
-        return parts[0]
-
-    # Top-level directories with direct module subdirs
-    if parts[0] in ("proto", "charts", "frontend-packages", "shared-packages", "afw-runtime"):
-        if len(parts) >= 2:
-            return "/".join(parts[:2])
-        return parts[0]
-
-    # Default: top-level directory or root
-    return parts[0] if parts[0] else "root"
+    """Extract module from file path using current config."""
+    return get_module_config().extract_module(path)
 
 
 def extract_file_change(pr_number: int, file_data: dict) -> FileChange:

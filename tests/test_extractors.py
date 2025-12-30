@@ -64,30 +64,33 @@ def make_timeline_event(**overrides) -> dict:
 
 
 class TestExtractModule:
-    """Test module path extraction from file paths."""
+    """Test module path extraction from file paths.
+
+    Uses default config patterns: src/{name}, packages/{name}, apps/{name}, .github
+    """
+
+    @pytest.fixture(autouse=True)
+    def reset_config(self):
+        """Reset module config singleton before each test."""
+        from src.extractors.files import set_module_config
+        from src.module_config import ModuleConfig
+
+        set_module_config(ModuleConfig.default())
 
     @pytest.mark.parametrize("path,expected", [
-        # Backend with language subdir
-        ("backend/py/cogna-tools/main.py", "backend/py/cogna-tools"),
-        ("backend/go-servers/apiserver/cmd/main.go", "backend/go-servers/apiserver"),
-        ("backend/ts/shared-lib/src/index.ts", "backend/ts/shared-lib"),
-        # Frontend
-        ("frontend/ts/webapp/src/App.tsx", "frontend/ts/webapp"),
-        # App runtime
-        ("app-runtime/py/worker/handler.py", "app-runtime/py/worker"),
-        # afw-runtime (edge case found in review)
-        ("afw-runtime/worker/main.py", "afw-runtime/worker"),
-        # Proto/charts/packages
-        ("proto/user/v1/user.proto", "proto/user"),
-        ("charts/webapp/values.yaml", "charts/webapp"),
-        ("frontend-packages/ui-kit/src/Button.tsx", "frontend-packages/ui-kit"),
-        ("shared-packages/utils/index.ts", "shared-packages/utils"),
-        # Edge cases
-        ("backend/py", "backend/py"),
-        ("backend", "backend"),
-        ("README.md", "README.md"),
-        ("", "root"),
+        # Default patterns
+        ("src/utils/helper.py", "src/utils"),
+        ("src/main.py", "src/main.py"),  # {name} captures filename
+        ("packages/ui-kit/Button.tsx", "packages/ui-kit"),
+        ("apps/web/pages/index.tsx", "apps/web"),
         (".github/workflows/ci.yml", ".github"),
+        # Root files
+        ("README.md", "root"),
+        (".gitignore", "root"),
+        ("", "root"),
+        # Fallback to default_depth=2
+        ("backend/py/tools/main.py", "backend/py"),
+        ("some/deep/nested/file.py", "some/deep"),
     ])
     def test_extract_module(self, path: str, expected: str):
         assert extract_module(path) == expected
@@ -177,16 +180,26 @@ class TestExtractPr:
 class TestExtractFileChange:
     """Test file change extraction."""
 
+    @pytest.fixture(autouse=True)
+    def reset_config(self):
+        """Reset module config singleton before each test."""
+        from src.extractors.files import set_module_config
+        from src.module_config import ModuleConfig
+
+        set_module_config(ModuleConfig.default())
+
     def test_basic_file(self):
+        # Uses default_depth=2 fallback for unmatched paths
         fc = extract_file_change(123, {"filename": "backend/py/api/handler.py", "status": "modified", "additions": 10, "deletions": 5, "changes": 15})
         assert fc.pr_number == 123
-        assert fc.module == "backend/py/api"
+        assert fc.module == "backend/py"  # default_depth=2
         assert fc.additions == 10
 
     def test_defaults(self):
         fc = extract_file_change(123, {"filename": "README.md"})
         assert fc.status == "modified"
         assert fc.additions == 0
+        assert fc.module == "root"  # Root file
 
 
 class TestExtractReview:
