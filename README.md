@@ -54,7 +54,7 @@ The tool runs 35 queries organized into categories:
 | `review_depth` | Inline comments per reviewer (engagement metric) |
 | `review_iterations` | Rounds of changes_requested before approval |
 | `stale_approvals` | PRs with commits pushed after approval |
-| `drive_by_reviews` | Short/low-value comments ("lgtm", "nice", "+1") |
+| `brief_comments` | Short comments analysis (length distribution) |
 | `self_review_activity` | Authors commenting on their own PRs |
 
 ### Temporal Patterns

@@ -18,7 +18,7 @@ from src.analyze import (
     review_depth,
     review_iterations,
     stale_approvals,
-    drive_by_reviews,
+    brief_comments,
     self_review_activity,
     # Temporal patterns
     review_by_time,
@@ -198,11 +198,11 @@ class TestAnalysisQueries:
         captured = capsys.readouterr()
         assert "Stale" in captured.out
 
-    def test_drive_by_reviews(self, mock_db, capsys):
-        """drive_by_reviews runs without error."""
-        drive_by_reviews(mock_db)
+    def test_brief_comments(self, mock_db, capsys):
+        """brief_comments runs without error."""
+        brief_comments(mock_db)
         captured = capsys.readouterr()
-        assert "Drive-by" in captured.out
+        assert "Brief Comments" in captured.out
 
     def test_self_review_activity(self, mock_db, capsys):
         """self_review_activity runs without error."""

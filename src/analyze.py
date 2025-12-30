@@ -350,9 +350,9 @@ def stale_approvals(con: duckdb.DuckDBPyConnection) -> None:
     """)
 
 
-def drive_by_reviews(con: duckdb.DuckDBPyConnection) -> None:
-    """Find reviewers who leave short/low-value comments."""
-    run_query(con, "Drive-by Reviews (Short Comments)", """
+def brief_comments(con: duckdb.DuckDBPyConnection) -> None:
+    """Find reviewers who leave short comments."""
+    run_query(con, "Brief Comments Analysis", """
         WITH comment_stats AS (
             SELECT
                 author_login,
@@ -1084,7 +1084,7 @@ def main() -> None:
     review_depth(con)
     review_iterations(con)
     stale_approvals(con)
-    drive_by_reviews(con)
+    brief_comments(con)
     self_review_activity(con)
 
     # Temporal patterns
