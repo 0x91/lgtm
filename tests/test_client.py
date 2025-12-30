@@ -89,3 +89,42 @@ class TestGitHubClient:
     async def test_handle_rate_limit_returns_false_for_other_403(self, github_client):
         response = httpx.Response(403, json={"message": "forbidden"}, headers={"X-RateLimit-Remaining": "100"})
         assert await github_client._handle_rate_limit(response) is False
+
+    @pytest.mark.trio
+    @respx.mock
+    async def test_secondary_rate_limit_403_with_retry_after(self, github_client, autojump_clock):
+        """Test that 403 with Retry-After header is handled as secondary rate limit."""
+        respx.get("https://api.github.com/test").mock(
+            side_effect=[
+                httpx.Response(
+                    403,
+                    json={"message": "secondary rate limit"},
+                    headers={"Retry-After": "2", "X-RateLimit-Remaining": "100"},
+                ),
+                httpx.Response(200, json={"ok": True}),
+            ]
+        )
+        result = await github_client.get("/test")
+        assert result["ok"] is True
+
+    @pytest.mark.trio
+    @respx.mock
+    async def test_secondary_rate_limit_429_with_retry_after(self, github_client, autojump_clock):
+        """Test that 429 with Retry-After header triggers proper wait."""
+        respx.get("https://api.github.com/test").mock(
+            side_effect=[
+                httpx.Response(
+                    429,
+                    json={"message": "too many requests"},
+                    headers={"Retry-After": "3"},
+                ),
+                httpx.Response(200, json={"ok": True}),
+            ]
+        )
+        result = await github_client.get("/test")
+        assert result["ok"] is True
+
+    def test_rate_limit_tracking(self, github_client_uninit):
+        """Test that rate limit properties have sensible defaults."""
+        assert github_client_uninit.rate_limit_remaining == 5000
+        assert github_client_uninit.rate_limit_reset == 0

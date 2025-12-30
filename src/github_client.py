@@ -211,7 +211,22 @@ class GitHubClient:
             self._rate_limit_reset = float(reset)
 
     async def _handle_rate_limit(self, response: httpx.Response) -> bool:
-        """Handle rate limiting. Returns True if request should be retried."""
+        """Handle rate limiting. Returns True if request should be retried.
+
+        Handles both primary (quota exhaustion) and secondary (abuse) rate limits:
+        - Primary: 403 with X-RateLimit-Remaining=0, wait until X-RateLimit-Reset
+        - Secondary: 403 or 429 with Retry-After header, wait that many seconds
+        """
+        # Check for Retry-After header first (works for both 403 and 429)
+        # Secondary rate limits use this header
+        retry_after = response.headers.get("Retry-After")
+        if retry_after and response.status_code in (403, 429):
+            wait_seconds = int(retry_after)
+            logger.warning(f"Rate limited (secondary). Waiting {wait_seconds}s (Retry-After)...")
+            await trio.sleep(wait_seconds)
+            return True
+
+        # Primary rate limit: 403 with remaining=0
         if response.status_code == 403:
             remaining = int(response.headers.get("X-RateLimit-Remaining", 1))
             if remaining == 0:
@@ -221,10 +236,10 @@ class GitHubClient:
                 await trio.sleep(wait_seconds + 1)
                 return True
 
+        # 429 without Retry-After (shouldn't happen, but handle it)
         if response.status_code == 429:
-            retry_after = int(response.headers.get("Retry-After", 60))
-            logger.warning(f"Rate limited (secondary). Waiting {retry_after}s...")
-            await trio.sleep(retry_after)
+            logger.warning("Rate limited (429 without Retry-After). Waiting 60s...")
+            await trio.sleep(60)
             return True
 
         return False
