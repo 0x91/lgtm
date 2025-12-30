@@ -5,13 +5,10 @@ Run with: uv run analyze
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import duckdb
 
 from .module_config import ModuleConfig
-
-DATA_DIR = Path("data/raw")
+from .repo import get_repo
 
 # Module-level config instance
 _module_config: ModuleConfig | None = None
@@ -28,6 +25,7 @@ def get_module_config() -> ModuleConfig:
 def get_connection() -> duckdb.DuckDBPyConnection:
     """Get DuckDB connection with parquet files and computed columns."""
     con = duckdb.connect()
+    data_dir = get_repo().raw_data_dir
 
     # Register base tables as views
     for table in [
@@ -39,7 +37,7 @@ def get_connection() -> duckdb.DuckDBPyConnection:
         "timeline_events",
         "users",
     ]:
-        path = DATA_DIR / f"{table}.parquet"
+        path = data_dir / f"{table}.parquet"
         if path.exists():
             con.execute(f"CREATE VIEW {table} AS SELECT * FROM '{path}'")
 
@@ -50,7 +48,7 @@ def get_connection() -> duckdb.DuckDBPyConnection:
 
     # Create enriched files table with precomputed module and is_generated
     # This avoids calling Python UDFs repeatedly in queries
-    files_path = DATA_DIR / "files.parquet"
+    files_path = data_dir / "files.parquet"
     if files_path.exists():
         con.execute(f"""
             CREATE TABLE files AS

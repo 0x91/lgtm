@@ -7,20 +7,33 @@ This tool extracts PR and review data from GitHub into Parquet files, then analy
 ## Quick Start
 
 ```bash
+# Install as a tool
+uv tool install git+https://github.com/0x91/lgtm.git
+
+# Go to any repo with a GitHub remote
+cd your-repo
+
+# Set your GitHub token
+export GITHUB_TOKEN=ghp_xxx
+
+# Fetch PR data from GitHub (auto-detects repo from git remote)
+lgtm fetch
+
+# Generate the narrative report
+lgtm report
+```
+
+Or run from source:
+
+```bash
 git clone https://github.com/0x91/lgtm.git
 cd lgtm
 uv sync
 
-cp .env.example .env
-# Edit .env with your repo and credentials
-
-# Generate module config from your monorepo structure
-uv run lgtm init
-
-# Extract PR data from GitHub
-uv run lgtm extract
-
-# Generate the narrative report
+# Run against any repo
+cd /path/to/your-repo
+export GITHUB_TOKEN=ghp_xxx
+uv run lgtm fetch
 uv run lgtm report
 ```
 
@@ -28,10 +41,10 @@ uv run lgtm report
 
 | Command | Description |
 |---------|-------------|
-| `lgtm init` | Auto-generate `lgtm.yaml` from package manager workspaces |
-| `lgtm extract` | Pull PR/review data from GitHub API into Parquet files |
+| `lgtm fetch` | Pull PR/review data from GitHub API into `~/.cache/lgtm/{owner}/{repo}/` |
 | `lgtm report` | Generate narrative report answering "Is review adding value?" |
 | `lgtm analyze` | Run all 35 analysis queries (raw table output) |
+| `lgtm init` | Auto-generate `lgtm.yaml` from package manager workspaces |
 
 ## Analysis Queries
 
@@ -200,9 +213,9 @@ bots:
   include_defaults: true
 ```
 
-## What You Get
+## Data Storage
 
-Eight normalized Parquet tables in `data/raw/`:
+Data is stored globally in `~/.cache/lgtm/{owner}/{repo}/raw/`:
 
 | Table | Description |
 |-------|-------------|
@@ -221,32 +234,42 @@ Query with DuckDB:
 -- Who rubber-stamps the most?
 SELECT reviewer_login, COUNT(*) as approvals,
        SUM(CASE WHEN body = '' THEN 1 ELSE 0 END) as empty_approvals
-FROM 'data/raw/reviews.parquet'
+FROM '~/.cache/lgtm/your-org/your-repo/raw/reviews.parquet'
 WHERE state = 'APPROVED'
 GROUP BY 1 ORDER BY 3 DESC;
-
--- Which modules get the least review attention?
-SELECT module, COUNT(DISTINCT pr_number) as prs,
-       AVG(review_count) as avg_reviews
-FROM 'data/raw/files.parquet' f
-JOIN (SELECT pr_number, COUNT(*) as review_count
-      FROM 'data/raw/reviews.parquet' GROUP BY 1) r
-  ON f.pr_number = r.pr_number
-GROUP BY 1 ORDER BY 3;
 ```
+
+## Repository Detection
+
+The tool detects which repository to analyze in this order:
+
+1. **Git remote** (default) - Run `lgtm fetch` from any directory with a GitHub remote
+2. **Environment variables** - `REPO_OWNER` and `REPO_NAME`
+3. **lgtm.yaml** - Add a `repo` section:
+
+```yaml
+repo:
+  owner: your-org
+  name: your-repo
+```
+
+This is useful when analyzing a different repo from the lgtm source directory.
 
 ## Environment Config
 
-All secrets live in `.env` (gitignored):
+Required:
 
 ```bash
-REPO_OWNER=your-org
-REPO_NAME=your-repo
-START_DATE=2025-01-01
-GITHUB_TOKEN=ghp_xxx
+GITHUB_TOKEN=ghp_xxx   # Or use GitHub App (see below)
 ```
 
-For higher rate limits (15k+/hr vs 5k), use a GitHub App instead of a PAT:
+Optional:
+
+```bash
+START_DATE=2025-01-01  # Default: Jan 1 of current year
+```
+
+For higher rate limits (15k+/hr vs 5k), use a GitHub App:
 
 ```bash
 GITHUB_APP_ID=123456

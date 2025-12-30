@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import signal
-import sys
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -21,16 +20,7 @@ from rich.console import Console
 from rich.live import Live
 from rich.table import Table
 
-from .config import (
-    CHECKPOINT_FILE,
-    DATA_DIR,
-    END_DATE,
-    LOG_FILE,
-    RAW_DATA_DIR,
-    REPO_NAME,
-    REPO_OWNER,
-    START_DATE,
-)
+from .config import END_DATE, START_DATE
 from .extractors.checks import extract_check_run
 from .extractors.comments import extract_pr_comment, extract_review_comment
 from .extractors.files import extract_file_change
@@ -51,6 +41,7 @@ from .models import (
     User,
 )
 from .module_config import ModuleConfig
+from .repo import get_repo
 
 # Concurrency settings
 CONCURRENT_PRS = 4  # Process this many PRs concurrently
@@ -58,21 +49,22 @@ PR_QUEUE_SIZE = 50  # Buffer size for PR queue
 RATE_LIMIT_PRODUCER_PAUSE = 100  # Producer pauses if rate limit drops below this
 
 
+# Module-level logger (initialized by setup_logging)
+logger = logging.getLogger(__name__)
+
+
 def setup_logging():
     """Setup file logging for debugging."""
-    os.makedirs(DATA_DIR, exist_ok=True)
+    repo = get_repo()
+    os.makedirs(repo.data_dir, exist_ok=True)
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
         handlers=[
-            logging.FileHandler(LOG_FILE, mode="a"),
+            logging.FileHandler(repo.log_file, mode="a"),
         ],
     )
-    return logging.getLogger(__name__)
-
-
-logger = setup_logging()
 
 
 class ExtractionState(Enum):
@@ -141,6 +133,7 @@ class DataExtractor:
     def __init__(self, client: GitHubClient, console: Console):
         self.client = client
         self.console = console
+        self.repo = get_repo()
 
         # Data storage
         self.prs: list[PullRequest] = []
@@ -178,11 +171,12 @@ class DataExtractor:
             refresh_days: If set, PRs created within the last N days will be
                          removed from processed_prs so they get re-extracted.
         """
-        if not os.path.exists(CHECKPOINT_FILE):
+        checkpoint_file = self.repo.checkpoint_file
+        if not checkpoint_file.exists():
             return False
 
         try:
-            with open(CHECKPOINT_FILE) as f:
+            with open(checkpoint_file) as f:
                 checkpoint = json.load(f)
 
             self.processed_prs = set(checkpoint.get("processed_prs", []))
@@ -193,9 +187,10 @@ class DataExtractor:
                 self.failed_prs[pr_num] = ErrorRecord(**error_data)
 
             # If refresh_days is set, remove recent PRs from processed set
-            if refresh_days and os.path.exists(f"{RAW_DATA_DIR}/prs.parquet"):
+            prs_parquet = self.repo.raw_data_dir / "prs.parquet"
+            if refresh_days and prs_parquet.exists():
                 cutoff = datetime.now(UTC) - timedelta(days=refresh_days)
-                existing_prs = pq.read_table(f"{RAW_DATA_DIR}/prs.parquet")
+                existing_prs = pq.read_table(str(prs_parquet))
 
                 # Find PRs created after cutoff
                 recent_prs = set()
@@ -223,7 +218,8 @@ class DataExtractor:
         Writes to a temp file first, then renames to ensure atomicity.
         This prevents corruption if the process is killed mid-write.
         """
-        os.makedirs(os.path.dirname(CHECKPOINT_FILE), exist_ok=True)
+        checkpoint_file = self.repo.checkpoint_file
+        os.makedirs(checkpoint_file.parent, exist_ok=True)
 
         checkpoint = {
             "processed_prs": list(self.processed_prs),
@@ -245,18 +241,19 @@ class DataExtractor:
         }
 
         # Write to temp file first, then atomic rename
-        temp_file = f"{CHECKPOINT_FILE}.tmp"
+        temp_file = checkpoint_file.with_suffix(".tmp")
         with open(temp_file, "w") as f:
             json.dump(checkpoint, f, indent=2)
-        os.replace(temp_file, CHECKPOINT_FILE)  # Atomic on POSIX
+        os.replace(temp_file, checkpoint_file)  # Atomic on POSIX
 
     def save_error_log(self):
         """Save detailed error log."""
         if not self.failed_prs:
             return
 
-        error_log_path = f"{RAW_DATA_DIR}/extraction_errors.json"
-        os.makedirs(RAW_DATA_DIR, exist_ok=True)
+        raw_data_dir = self.repo.raw_data_dir
+        error_log_path = raw_data_dir / "extraction_errors.json"
+        os.makedirs(raw_data_dir, exist_ok=True)
 
         with open(error_log_path, "w") as f:
             json.dump(
@@ -415,7 +412,8 @@ class DataExtractor:
         When re-extracting PRs (e.g., with --refresh-days), existing data for
         those PRs is replaced with the new data.
         """
-        os.makedirs(RAW_DATA_DIR, exist_ok=True)
+        raw_data_dir = self.repo.raw_data_dir
+        os.makedirs(raw_data_dir, exist_ok=True)
 
         # Get the set of PR numbers we're updating
         updated_pr_numbers = {pr.pr_number for pr in self.prs}
@@ -432,7 +430,7 @@ class DataExtractor:
             if not items:
                 return
 
-            path = f"{RAW_DATA_DIR}/{filename}"
+            path = raw_data_dir / filename
             new_table = pa.Table.from_pylist(to_records(items))
 
             if os.path.exists(path):
@@ -657,7 +655,7 @@ class DataExtractor:
                 if pr_num not in self.processed_prs:
                     try:
                         pr_data = await self.client.get(
-                            f"/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_num}"
+                            f"/repos/{self.repo.owner}/{self.repo.name}/pulls/{pr_num}"
                         )
                         await send_channel.send(pr_data)
                     except Exception as e:
@@ -789,14 +787,15 @@ class DataExtractor:
         self.console.print(f"  Processed: {self.stats.processed_prs} PRs")
         self.console.print(f"  Failed: {self.stats.failed_prs} PRs")
         self.console.print(f"  API Requests: {self.stats.api_requests}")
-        self.console.print(f"  Log file: {LOG_FILE}")
+        self.console.print(f"  Data: {self.repo.raw_data_dir}")
+        self.console.print(f"  Log: {self.repo.log_file}")
 
         if was_interrupted:
             self.console.print("\n[dim]Run again to resume from checkpoint[/]")
 
         if self.failed_prs:
             self.console.print(
-                f"\n[yellow]Failed PRs logged to {RAW_DATA_DIR}/extraction_errors.json[/]"
+                f"\n[yellow]Failed PRs logged to {self.repo.raw_data_dir}/extraction_errors.json[/]"
             )
             self.console.print("[dim]Failed PRs will be retried automatically on next run[/]")
 
@@ -805,38 +804,24 @@ async def main(limit: int | None = None, refresh_days: int | None = None):
     """Main entry point."""
     console = Console()
 
+    # Setup logging (configures file handler for repo)
+    setup_logging()
+
     # Load module config and set it for extractors (for bot detection)
     config = ModuleConfig.load()
     set_extractor_config(config)
+
+    repo = get_repo()
+    logger.info(f"Fetching data for {repo.full_name}")
+    console.print(f"[bold]Repository: {repo.full_name}[/]")
+    console.print(f"[dim]Data dir: {repo.raw_data_dir}[/]")
 
     async with GitHubClient() as client:
         extractor = DataExtractor(client, console)
         await extractor.run(limit=limit, refresh_days=refresh_days)
 
 
-def cli():
-    """CLI entry point."""
-    import argparse
-
-    if not REPO_OWNER or not REPO_NAME:
-        print("Error: REPO_OWNER and REPO_NAME must be set in .env")
-        print("Example:")
-        print("  REPO_OWNER=your-org")
-        print("  REPO_NAME=your-repo")
-        sys.exit(1)
-
-    parser = argparse.ArgumentParser(description="Extract GitHub PR data for code review analysis")
-    parser.add_argument("--limit", "-n", type=int, help="Limit number of PRs to process")
-    parser.add_argument(
-        "--refresh-days",
-        "-r",
-        type=int,
-        help="Re-extract PRs from the last N days (updates existing data)",
-    )
-
-    args = parser.parse_args()
-    trio.run(main, args.limit, args.refresh_days)
-
-
 if __name__ == "__main__":
-    cli()
+    import trio
+
+    trio.run(main)

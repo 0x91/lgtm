@@ -19,9 +19,8 @@ from .config import (
     GITHUB_APP_PRIVATE_KEY_PATH,
     GITHUB_TOKEN,
     PER_PAGE,
-    REPO_NAME,
-    REPO_OWNER,
 )
+from .repo import get_repo
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +160,14 @@ class GitHubClient:
         self._request_count = 0
         self._rate_limit_remaining: int = 5000  # Conservative default
         self._rate_limit_reset: float = 0
+        self._repo = None
+
+    @property
+    def repo(self):
+        """Lazily get repo info."""
+        if self._repo is None:
+            self._repo = get_repo()
+        return self._repo
 
     async def __aenter__(self):
         self.client = httpx.AsyncClient(
@@ -341,7 +348,7 @@ class GitHubClient:
         since: datetime | None = None,
     ) -> AsyncGenerator[dict]:
         """Get all pull requests, oldest first by default."""
-        path = f"/repos/{REPO_OWNER}/{REPO_NAME}/pulls"
+        path = f"/repos/{self.repo.owner}/{self.repo.name}/pulls"
         params = {"state": state, "sort": sort, "direction": direction}
 
         async for pr in self.paginate(path, params):
@@ -355,38 +362,38 @@ class GitHubClient:
 
     async def get_pr_reviews(self, pr_number: int) -> list[dict]:
         """Get all reviews for a PR."""
-        path = f"/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}/reviews"
+        path = f"/repos/{self.repo.owner}/{self.repo.name}/pulls/{pr_number}/reviews"
         return await self.paginate_all(path)
 
     async def get_pr_comments(self, pr_number: int) -> list[dict]:
         """Get PR-level comments (issue comments)."""
-        path = f"/repos/{REPO_OWNER}/{REPO_NAME}/issues/{pr_number}/comments"
+        path = f"/repos/{self.repo.owner}/{self.repo.name}/issues/{pr_number}/comments"
         return await self.paginate_all(path)
 
     async def get_pr_review_comments(self, pr_number: int) -> list[dict]:
         """Get inline code review comments."""
-        path = f"/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}/comments"
+        path = f"/repos/{self.repo.owner}/{self.repo.name}/pulls/{pr_number}/comments"
         return await self.paginate_all(path)
 
     async def get_pr_files(self, pr_number: int) -> list[dict]:
         """Get files changed in a PR."""
-        path = f"/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}/files"
+        path = f"/repos/{self.repo.owner}/{self.repo.name}/pulls/{pr_number}/files"
         return await self.paginate_all(path)
 
     async def get_pr_commits(self, pr_number: int) -> list[dict]:
         """Get commits in a PR."""
-        path = f"/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_number}/commits"
+        path = f"/repos/{self.repo.owner}/{self.repo.name}/pulls/{pr_number}/commits"
         return await self.paginate_all(path)
 
     async def get_check_runs(self, ref: str) -> list[dict]:
         """Get check runs for a commit ref."""
-        path = f"/repos/{REPO_OWNER}/{REPO_NAME}/commits/{ref}/check-runs"
+        path = f"/repos/{self.repo.owner}/{self.repo.name}/commits/{ref}/check-runs"
         response = await self.get(path)
         return response.get("check_runs", [])
 
     async def get_pr_timeline(self, pr_number: int) -> list[dict]:
         """Get timeline events for a PR."""
-        path = f"/repos/{REPO_OWNER}/{REPO_NAME}/issues/{pr_number}/timeline"
+        path = f"/repos/{self.repo.owner}/{self.repo.name}/issues/{pr_number}/timeline"
         # Timeline API requires special accept header
         headers = {"Accept": "application/vnd.github.mockingbird-preview+json"}
         return await self.paginate_all(path, headers=headers)

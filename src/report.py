@@ -6,8 +6,6 @@ Instead of dumping tables, this tells a story:
 
 from __future__ import annotations
 
-import os
-
 import duckdb
 from rich.console import Console
 from rich.panel import Panel
@@ -15,6 +13,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .analyze import get_connection
+from .repo import get_repo
 
 console = Console()
 
@@ -49,12 +48,11 @@ def format_minutes(value: float | None) -> str:
 
 
 def get_repo_name() -> str:
-    """Get repo name from environment or default."""
-    owner = os.environ.get("REPO_OWNER", "")
-    name = os.environ.get("REPO_NAME", "")
-    if owner and name:
-        return f"{owner}/{name}"
-    return "your-repo"
+    """Get repo name from detected repo."""
+    try:
+        return get_repo().full_name
+    except ValueError:
+        return "your-repo"
 
 
 # ============================================================================

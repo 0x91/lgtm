@@ -321,3 +321,39 @@ class TestBotConfigLoading:
         config = ModuleConfig.default()
         yaml_str = config.to_yaml()
         assert "bots:" not in yaml_str
+
+
+class TestRepoConfigLoading:
+    """Tests for loading repo config from YAML."""
+
+    def test_from_dict_with_repo(self):
+        """Load config with repo section."""
+        data = {
+            "repo": {
+                "owner": "myorg",
+                "name": "myrepo",
+            }
+        }
+        config = ModuleConfig.from_dict(data)
+        assert config.repo_owner == "myorg"
+        assert config.repo_name == "myrepo"
+
+    def test_from_dict_without_repo(self):
+        """Config without repo section has None values."""
+        data = {"modules": {"default_depth": 2}}
+        config = ModuleConfig.from_dict(data)
+        assert config.repo_owner is None
+        assert config.repo_name is None
+
+    def test_from_dict_partial_repo(self):
+        """Config with partial repo section."""
+        data = {"repo": {"owner": "myorg"}}
+        config = ModuleConfig.from_dict(data)
+        assert config.repo_owner == "myorg"
+        assert config.repo_name is None
+
+    def test_default_has_no_repo(self):
+        """Default config has no repo set."""
+        config = ModuleConfig.default()
+        assert config.repo_owner is None
+        assert config.repo_name is None

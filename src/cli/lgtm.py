@@ -37,29 +37,25 @@ def main():
         help="Output file path (default: lgtm.yaml in root)",
     )
 
-    # extract command - pull PR data from GitHub
-    extract_parser = subparsers.add_parser(
-        "extract",
-        help="Extract PR and review data from GitHub",
-        description="Pull PR data from GitHub API and save to parquet files.",
+    # fetch command - pull PR data from GitHub
+    fetch_parser = subparsers.add_parser(
+        "fetch",
+        help="Fetch PR and review data from GitHub",
+        description="Pull PR data from GitHub API and save to ~/.cache/lgtm/{owner}/{repo}/",
     )
-    extract_parser.add_argument(
-        "--since",
-        type=str,
+    fetch_parser.add_argument(
+        "--limit",
+        "-n",
+        type=int,
         default=None,
-        help="Start date (YYYY-MM-DD format, default: Jan 1 current year)",
+        help="Limit number of PRs to fetch",
     )
-    extract_parser.add_argument(
-        "--checkpoint",
-        type=Path,
+    fetch_parser.add_argument(
+        "--refresh-days",
+        "-r",
+        type=int,
         default=None,
-        help="Checkpoint file path for resuming",
-    )
-    extract_parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=Path("data/raw"),
-        help="Output directory for parquet files",
+        help="Re-fetch PRs from the last N days (updates existing data)",
     )
 
     # analyze command - run analysis queries (raw tables)
@@ -75,12 +71,6 @@ def main():
         default=None,
         help="Run specific query (default: run all)",
     )
-    analyze_parser.add_argument(
-        "--data-dir",
-        type=Path,
-        default=Path("data/raw"),
-        help="Directory containing parquet files",
-    )
 
     # report command - narrative report
     subparsers.add_parser(
@@ -95,12 +85,13 @@ def main():
         output = args.output or args.root / "lgtm.yaml"
         init_config(args.root, output)
 
-    elif args.command == "extract":
+    elif args.command == "fetch":
         # Import here to avoid circular imports and slow startup
-        from ..main import cli as extract_cli
+        import trio
 
-        # Pass args to extract CLI
-        extract_cli()
+        from ..main import main as fetch_main
+
+        trio.run(fetch_main, args.limit, args.refresh_days)
 
     elif args.command == "analyze":
         from ..analyze import main as analyze_main

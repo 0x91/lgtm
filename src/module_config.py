@@ -199,6 +199,10 @@ class ModuleConfig:
     bot_logins: list[str] = field(default_factory=list)
     include_default_bots: bool = True  # Set False to only use custom bot config
 
+    # Repository override (optional - can also be detected from git remote)
+    repo_owner: str | None = None
+    repo_name: str | None = None
+
     @classmethod
     def load(cls, path: Path | str | None = None) -> ModuleConfig:
         """Load config from YAML file or return defaults."""
@@ -222,6 +226,7 @@ class ModuleConfig:
         """Create config from dictionary (e.g., parsed YAML)."""
         modules_data = data.get("modules", {})
         bots_data = data.get("bots", {})
+        repo_data = data.get("repo", {})
 
         rules = []
         for rule_data in modules_data.get("rules", []):
@@ -261,6 +266,8 @@ class ModuleConfig:
             bot_patterns=bot_patterns,
             bot_logins=custom_bot_logins,
             include_default_bots=include_default_bots,
+            repo_owner=repo_data.get("owner"),
+            repo_name=repo_data.get("name"),
         )
 
     @classmethod
