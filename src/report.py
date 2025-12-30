@@ -7,7 +7,6 @@ Instead of dumping tables, this tells a story:
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 
 import duckdb
 from rich.console import Console
@@ -16,7 +15,6 @@ from rich.table import Table
 from rich.text import Text
 
 from .analyze import get_connection
-
 
 console = Console()
 
@@ -338,13 +336,289 @@ def get_module_reviewers(con: duckdb.DuckDBPyConnection) -> list[dict]:
                 "num_reviewers": r[4],
                 "reviewers": [],
             }
-        modules[module]["reviewers"].append({
-            "login": r[1],
-            "prs": r[2],
-            "share": r[3],
-        })
+        modules[module]["reviewers"].append(
+            {
+                "login": r[1],
+                "prs": r[2],
+                "share": r[3],
+            }
+        )
 
     return list(modules.values())
+
+
+def get_thread_outcomes(con: duckdb.DuckDBPyConnection) -> dict:
+    """Get thread resolution outcome stats.
+
+    Based on Bosu et al. 2015: usefulness is best measured by
+    whether feedback led to action.
+    """
+    result = con.execute("""
+        WITH thread_stats AS (
+            SELECT
+                pr_number,
+                path,
+                -- Group comments into threads by path (simplified)
+                COUNT(*) as comment_count,
+                BOOL_OR(COALESCE(is_resolved, false)) as resolved,
+                BOOL_OR(COALESCE(is_outdated, false)) as outdated,
+                COUNT(DISTINCT author_login) as unique_authors
+            FROM review_comments
+            WHERE NOT author_is_bot
+            GROUP BY pr_number, path
+        )
+        SELECT
+            COUNT(*) as total_threads,
+            SUM(CASE WHEN resolved THEN 1 ELSE 0 END) as resolved,
+            SUM(CASE WHEN outdated AND NOT resolved THEN 1 ELSE 0 END) as outdated,
+            SUM(CASE WHEN unique_authors > 1 THEN 1 ELSE 0 END) as discussed,
+            SUM(CASE WHEN NOT resolved AND NOT outdated AND unique_authors = 1 THEN 1 ELSE 0 END) as standalone,
+            AVG(comment_count) as avg_thread_depth,
+            -- Check if we have any resolution data at all
+            SUM(CASE WHEN resolved OR outdated THEN 1 ELSE 0 END) as any_resolution_data
+        FROM thread_stats
+    """).fetchone()
+
+    if not result:
+        return {}
+
+    total = result[0] or 1
+    resolved = result[1] or 0
+    outdated = result[2] or 0
+    has_resolution_data = (result[6] or 0) > 0
+
+    return {
+        "total_threads": result[0] or 0,
+        "resolved": resolved,
+        "outdated": outdated,
+        "discussed": result[3] or 0,
+        "standalone": result[4] or 0,
+        "avg_depth": result[5] or 0,
+        "addressed_rate": 100.0 * (resolved + outdated) / total if has_resolution_data else None,
+        "has_resolution_data": has_resolution_data,
+    }
+
+
+def get_iteration_stats(con: duckdb.DuckDBPyConnection) -> dict:
+    """Get stats on whether PRs iterated after review feedback.
+
+    If review leads to commits, it's adding value.
+    """
+    result = con.execute("""
+        WITH review_timing AS (
+            SELECT
+                p.pr_number,
+                MIN(r.submitted_at) as first_review,
+                MAX(r.submitted_at) as last_review
+            FROM prs p
+            JOIN reviews r ON p.pr_number = r.pr_number
+            WHERE p.merged AND NOT r.reviewer_is_bot
+            GROUP BY p.pr_number
+        ),
+        commit_after_review AS (
+            SELECT
+                rt.pr_number,
+                COUNT(DISTINCT te.created_at) FILTER (
+                    WHERE te.event_type = 'committed'
+                    AND te.created_at > rt.first_review
+                ) as commits_after_review
+            FROM review_timing rt
+            LEFT JOIN timeline_events te ON rt.pr_number = te.pr_number
+            GROUP BY rt.pr_number
+        )
+        SELECT
+            COUNT(*) as total_prs,
+            SUM(CASE WHEN commits_after_review > 0 THEN 1 ELSE 0 END) as prs_with_iteration,
+            AVG(commits_after_review) as avg_commits_after
+        FROM commit_after_review
+    """).fetchone()
+
+    if not result:
+        return {}
+
+    total = result[0] or 1
+    return {
+        "total_prs": result[0] or 0,
+        "iterated": result[1] or 0,
+        "avg_commits": result[2] or 0,
+        "iteration_rate": 100.0 * (result[1] or 0) / total,
+    }
+
+
+def get_feedback_with_code(con: duckdb.DuckDBPyConnection) -> dict:
+    """Get stats on comments with code suggestions."""
+    result = con.execute("""
+        SELECT
+            COUNT(*) as total_comments,
+            SUM(CASE WHEN body LIKE '%```%' THEN 1 ELSE 0 END) as with_code,
+            SUM(CASE WHEN body LIKE '%http%' THEN 1 ELSE 0 END) as with_links
+        FROM review_comments
+        WHERE NOT author_is_bot
+    """).fetchone()
+
+    if not result:
+        return {}
+
+    total = result[0] or 1
+    return {
+        "total": result[0] or 0,
+        "with_code": result[1] or 0,
+        "with_links": result[2] or 0,
+        "code_rate": 100.0 * (result[1] or 0) / total,
+        "link_rate": 100.0 * (result[2] or 0) / total,
+    }
+
+
+def get_reviewer_file_experience(con: duckdb.DuckDBPyConnection) -> dict:
+    """Get stats on whether reviewers have prior experience with files they're reviewing.
+
+    Based on Bosu et al. 2015: "reviewers who had reviewed a file before were
+    almost twice more useful (65%-71%) than first-time reviewers (32%-37%)"
+    """
+    result = con.execute("""
+        WITH reviewer_file_pairs AS (
+            -- For each review, get all files the reviewer is looking at
+            SELECT DISTINCT
+                r.pr_number,
+                r.reviewer_login,
+                r.submitted_at,
+                f.filename
+            FROM reviews r
+            JOIN files f ON r.pr_number = f.pr_number
+            WHERE NOT r.reviewer_is_bot
+              AND r.state IN ('APPROVED', 'CHANGES_REQUESTED', 'COMMENTED')
+              AND NOT f.is_gen
+        ),
+        file_experience AS (
+            -- For each file in a review, check if reviewer has seen it before
+            SELECT
+                rfp.pr_number,
+                rfp.reviewer_login,
+                rfp.filename,
+                EXISTS (
+                    SELECT 1 FROM reviewer_file_pairs prior
+                    WHERE prior.reviewer_login = rfp.reviewer_login
+                      AND prior.filename = rfp.filename
+                      AND prior.submitted_at < rfp.submitted_at
+                ) as has_prior_experience
+            FROM reviewer_file_pairs rfp
+        ),
+        review_experience AS (
+            -- Aggregate to review level: % of files reviewer has seen before
+            SELECT
+                pr_number,
+                reviewer_login,
+                COUNT(*) as files_in_review,
+                SUM(CASE WHEN has_prior_experience THEN 1 ELSE 0 END) as files_seen_before,
+                1.0 * SUM(CASE WHEN has_prior_experience THEN 1 ELSE 0 END) / COUNT(*) as familiarity_pct
+            FROM file_experience
+            GROUP BY pr_number, reviewer_login
+        )
+        SELECT
+            COUNT(*) as total_reviews,
+            -- Reviews where reviewer has seen 0% of files before
+            SUM(CASE WHEN familiarity_pct = 0 THEN 1 ELSE 0 END) as fully_unfamiliar,
+            -- Reviews where reviewer has seen <25% of files
+            SUM(CASE WHEN familiarity_pct < 0.25 THEN 1 ELSE 0 END) as mostly_unfamiliar,
+            -- Reviews where reviewer has seen 75%+ of files
+            SUM(CASE WHEN familiarity_pct >= 0.75 THEN 1 ELSE 0 END) as mostly_familiar,
+            -- Reviews where reviewer has seen 100% of files
+            SUM(CASE WHEN familiarity_pct = 1 THEN 1 ELSE 0 END) as fully_familiar,
+            AVG(familiarity_pct) as avg_familiarity
+        FROM review_experience
+    """).fetchone()
+
+    if not result:
+        return {}
+
+    total = result[0] or 1
+    return {
+        "total_reviews": result[0] or 0,
+        "fully_unfamiliar": result[1] or 0,
+        "mostly_unfamiliar": result[2] or 0,
+        "mostly_familiar": result[3] or 0,
+        "fully_familiar": result[4] or 0,
+        "avg_familiarity": (result[5] or 0) * 100,
+        "unfamiliar_rate": 100.0 * (result[1] or 0) / total,
+        "familiar_rate": 100.0 * (result[3] or 0) / total,
+    }
+
+
+def get_first_time_file_reviews(con: duckdb.DuckDBPyConnection) -> list[dict]:
+    """Get large PRs where reviewer has never seen any of the files before.
+
+    This is a warning signal per Bosu et al. - first-time reviewers of an
+    artifact are less useful.
+    """
+    results = con.execute("""
+        WITH reviewer_file_pairs AS (
+            SELECT DISTINCT
+                r.pr_number,
+                r.reviewer_login,
+                r.submitted_at,
+                f.filename
+            FROM reviews r
+            JOIN files f ON r.pr_number = f.pr_number
+            WHERE NOT r.reviewer_is_bot
+              AND r.state IN ('APPROVED', 'CHANGES_REQUESTED', 'COMMENTED')
+              AND NOT f.is_gen
+        ),
+        file_experience AS (
+            SELECT
+                rfp.pr_number,
+                rfp.reviewer_login,
+                rfp.filename,
+                EXISTS (
+                    SELECT 1 FROM reviewer_file_pairs prior
+                    WHERE prior.reviewer_login = rfp.reviewer_login
+                      AND prior.filename = rfp.filename
+                      AND prior.submitted_at < rfp.submitted_at
+                ) as has_prior_experience
+            FROM reviewer_file_pairs rfp
+        ),
+        review_experience AS (
+            SELECT
+                pr_number,
+                reviewer_login,
+                COUNT(*) as files_in_review,
+                SUM(CASE WHEN has_prior_experience THEN 1 ELSE 0 END) as files_seen_before
+            FROM file_experience
+            GROUP BY pr_number, reviewer_login
+        ),
+        pr_size AS (
+            SELECT
+                pr_number,
+                SUM(CASE WHEN NOT is_gen THEN additions + deletions ELSE 0 END) as code_lines
+            FROM files
+            GROUP BY pr_number
+        )
+        SELECT
+            re.pr_number,
+            re.reviewer_login,
+            re.files_in_review,
+            ps.code_lines,
+            p.author_login
+        FROM review_experience re
+        JOIN pr_size ps ON re.pr_number = ps.pr_number
+        JOIN prs p ON re.pr_number = p.pr_number
+        WHERE re.files_seen_before = 0  -- Never seen any of these files
+          AND ps.code_lines >= 300      -- Large PR
+          AND p.merged
+          AND NOT p.author_is_bot
+        ORDER BY ps.code_lines DESC
+        LIMIT 15
+    """).fetchall()
+
+    return [
+        {
+            "pr_number": r[0],
+            "reviewer": r[1],
+            "files": r[2],
+            "lines": r[3],
+            "author": r[4],
+        }
+        for r in results
+    ]
 
 
 def get_red_flags(con: duckdb.DuckDBPyConnection) -> list[dict]:
@@ -466,7 +740,9 @@ def print_short_answer(approval_ctx: dict, quick_large: list[dict]) -> None:
     else:
         pct_color = "bold green"
 
-    console.print(f"[{pct_color}]{format_pct(empty_pct)}[/{pct_color}] of approvals have no comment or feedback. But context matters:")
+    console.print(
+        f"[{pct_color}]{format_pct(empty_pct)}[/{pct_color}] of approvals have no comment or feedback. But context matters:"
+    )
     console.print()
 
     # Expert context
@@ -474,14 +750,18 @@ def print_short_answer(approval_ctx: dict, quick_large: list[dict]) -> None:
     expert_empty = approval_ctx.get("expert_empty", 0)
     if expert_total > 0:
         expert_pct = 100.0 * expert_empty / expert_total
-        console.print(f"  [green]\u2022[/green] From module experts: {format_pct(expert_pct)} empty (probably fine - they know the code)")
+        console.print(
+            f"  [green]\u2022[/green] From module experts: {format_pct(expert_pct)} empty (probably fine - they know the code)"
+        )
 
     # Familiar context
     familiar_total = approval_ctx.get("familiar_approvals", 0)
     familiar_empty = approval_ctx.get("familiar_empty", 0)
     if familiar_total > 0:
         familiar_pct = 100.0 * familiar_empty / familiar_total
-        console.print(f"  [green]\u2022[/green] From familiar reviewers: {format_pct(familiar_pct)} empty (know the author's work)")
+        console.print(
+            f"  [green]\u2022[/green] From familiar reviewers: {format_pct(familiar_pct)} empty (know the author's work)"
+        )
 
     # First-time context
     firsttime_total = approval_ctx.get("firsttime_approvals", 0)
@@ -489,14 +769,20 @@ def print_short_answer(approval_ctx: dict, quick_large: list[dict]) -> None:
     if firsttime_total > 0:
         firsttime_pct = 100.0 * firsttime_empty / firsttime_total
         if firsttime_pct > 30:
-            console.print(f"  [yellow]\u2022[/yellow] From first-time reviewers: {format_pct(firsttime_pct)} empty [yellow](worth checking)[/yellow]")
+            console.print(
+                f"  [yellow]\u2022[/yellow] From first-time reviewers: {format_pct(firsttime_pct)} empty [yellow](worth checking)[/yellow]"
+            )
         else:
-            console.print(f"  [green]\u2022[/green] From first-time reviewers: {format_pct(firsttime_pct)} empty")
+            console.print(
+                f"  [green]\u2022[/green] From first-time reviewers: {format_pct(firsttime_pct)} empty"
+            )
 
     # Quick large approvals
     if quick_large:
         console.print()
-        console.print(f"[bold red]{len(quick_large)} large PRs (500+ lines) were approved in under 5 minutes with no comments.[/bold red]")
+        console.print(
+            f"[bold red]{len(quick_large)} large PRs (500+ lines) were approved in under 5 minutes with no comments.[/bold red]"
+        )
 
 
 def print_review_depth(depth_data: list[dict]) -> None:
@@ -587,6 +873,168 @@ def print_module_ownership(module_data: list[dict]) -> None:
         console.print(line)
 
 
+def print_review_engagement(
+    thread_outcomes: dict,
+    iteration_stats: dict,
+    feedback_stats: dict,
+) -> None:
+    """Print review engagement and outcomes section."""
+    console.print("\n[dim]" + "\u2500" * 70 + "[/dim]")
+    console.print("\n[bold cyan]## Did Review Lead to Action?[/bold cyan]")
+    console.print("[dim]Outcomes matter more than activity[/dim]\n")
+
+    # Thread outcomes
+    total_threads = thread_outcomes.get("total_threads", 0)
+    has_resolution_data = thread_outcomes.get("has_resolution_data", False)
+
+    if total_threads > 0:
+        discussed = thread_outcomes.get("discussed", 0)
+        standalone = thread_outcomes.get("standalone", 0)
+
+        console.print(f"  [bold]Review threads:[/bold] {total_threads:,}")
+
+        if has_resolution_data:
+            resolved = thread_outcomes.get("resolved", 0)
+            outdated = thread_outcomes.get("outdated", 0)
+            addressed_rate = thread_outcomes.get("addressed_rate", 0)
+
+            # Color based on addressed rate
+            if addressed_rate >= 70:
+                rate_color = "green"
+            elif addressed_rate >= 50:
+                rate_color = "yellow"
+            else:
+                rate_color = "red"
+
+            console.print(
+                f"    [{rate_color}]\u2022[/{rate_color}] Resolved: {resolved:,} ({format_pct(100.0 * resolved / total_threads)})"
+            )
+            console.print(
+                f"    [{rate_color}]\u2022[/{rate_color}] Outdated (code changed): {outdated:,} ({format_pct(100.0 * outdated / total_threads)})"
+            )
+            console.print(f"    [dim]\u2022[/dim] Discussed (multi-author): {discussed:,}")
+            console.print(f"    [dim]\u2022[/dim] Standalone: {standalone:,}")
+            console.print()
+            console.print(
+                f"  [{rate_color}]{format_pct(addressed_rate)}[/{rate_color}] of threads led to resolution or code changes"
+            )
+        else:
+            # No resolution data - show what we can
+            console.print(
+                f"    [dim]\u2022[/dim] With back-and-forth: {discussed:,} ({format_pct(100.0 * discussed / total_threads)})"
+            )
+            console.print(f"    [dim]\u2022[/dim] Standalone comments: {standalone:,}")
+            console.print()
+            console.print(
+                "  [dim]Resolution data not available - re-extract to populate is_resolved/is_outdated[/dim]"
+            )
+
+        console.print()
+
+    # Iteration stats
+    total_prs = iteration_stats.get("total_prs", 0)
+    if total_prs > 0:
+        iteration_rate = iteration_stats.get("iteration_rate", 0)
+        avg_commits = iteration_stats.get("avg_commits", 0)
+
+        if iteration_rate >= 50:
+            iter_color = "green"
+            iter_note = "review is driving changes"
+        elif iteration_rate >= 30:
+            iter_color = "yellow"
+            iter_note = "some iteration happening"
+        else:
+            iter_color = "dim"
+            iter_note = "PRs mostly ship as-is"
+
+        console.print("  [bold]Post-review iteration:[/bold]")
+        console.print(
+            f"    [{iter_color}]\u2022[/{iter_color}] {format_pct(iteration_rate)} of PRs had commits after first review"
+        )
+        console.print(
+            f"    [dim]\u2022[/dim] Avg {avg_commits:.1f} commits after review when iterating"
+        )
+        console.print(f"    \u2192 {iter_note}")
+        console.print()
+
+    # Feedback quality signals
+    total_comments = feedback_stats.get("total", 0)
+    if total_comments > 0:
+        code_rate = feedback_stats.get("code_rate", 0)
+        link_rate = feedback_stats.get("link_rate", 0)
+
+        console.print("  [bold]Comment quality signals:[/bold]")
+        console.print(f"    [dim]\u2022[/dim] {format_pct(code_rate)} include code suggestions")
+        console.print(f"    [dim]\u2022[/dim] {format_pct(link_rate)} include links/references")
+
+
+def print_reviewer_file_experience(
+    experience: dict,
+    first_time_reviews: list[dict],
+) -> None:
+    """Print reviewer file experience section."""
+    console.print("\n[dim]" + "\u2500" * 70 + "[/dim]")
+    console.print("\n[bold cyan]## Reviewer File Experience[/bold cyan]")
+    console.print("[dim]Are reviewers familiar with what they're reviewing?[/dim]\n")
+
+    total = experience.get("total_reviews", 0)
+    if total == 0:
+        console.print("  [dim]No review data available[/dim]")
+        return
+
+    avg_familiarity = experience.get("avg_familiarity", 0)
+    unfamiliar_rate = experience.get("unfamiliar_rate", 0)
+
+    # Color based on familiarity rate
+    if avg_familiarity >= 60:
+        fam_color = "green"
+    elif avg_familiarity >= 40:
+        fam_color = "yellow"
+    else:
+        fam_color = "red"
+
+    console.print(
+        f"  [bold]File familiarity:[/bold] [{fam_color}]{format_pct(avg_familiarity)}[/{fam_color}] avg across {total:,} reviews"
+    )
+    console.print()
+
+    fully_unfamiliar = experience.get("fully_unfamiliar", 0)
+    fully_familiar = experience.get("fully_familiar", 0)
+
+    # Breakdown
+    console.print("  [dim]Breakdown:[/dim]")
+    console.print(
+        f"    [green]\u2022[/green] Fully familiar (100% files seen): {fully_familiar:,} ({format_pct(100.0 * fully_familiar / total)})"
+    )
+    console.print(
+        f"    [dim]\u2022[/dim] Mostly familiar (75%+): {experience.get('mostly_familiar', 0):,}"
+    )
+    console.print(
+        f"    [yellow]\u2022[/yellow] Mostly unfamiliar (<25%): {experience.get('mostly_unfamiliar', 0):,}"
+    )
+    console.print(
+        f"    [red]\u2022[/red] First-time (0% files seen): {fully_unfamiliar:,} ({format_pct(unfamiliar_rate)})"
+    )
+
+    # Show warning PRs if any
+    if first_time_reviews:
+        console.print()
+        console.print(
+            f"  [yellow]\u26a0 {len(first_time_reviews)} large PRs reviewed by someone who'd never seen the files:[/yellow]"
+        )
+
+        # Show top 5
+        for pr in first_time_reviews[:5]:
+            console.print(
+                f"    [dim]#{pr['pr_number']}[/dim] "
+                f"{pr['lines']:,} lines, {pr['files']} files - "
+                f"reviewed by {pr['reviewer']}"
+            )
+
+        if len(first_time_reviews) > 5:
+            console.print(f"    [dim]...and {len(first_time_reviews) - 5} more[/dim]")
+
+
 def print_red_flags(flags: list[dict]) -> None:
     """Print specific PRs that might have slipped through."""
     if not flags:
@@ -631,6 +1079,11 @@ def generate_report(con: duckdb.DuckDBPyConnection | None = None) -> None:
     quick_large = get_quick_large_approvals(con)
     depth_data = get_review_depth_by_type(con)
     module_data = get_module_reviewers(con)
+    thread_outcomes = get_thread_outcomes(con)
+    iteration_stats = get_iteration_stats(con)
+    feedback_stats = get_feedback_with_code(con)
+    reviewer_experience = get_reviewer_file_experience(con)
+    first_time_reviews = get_first_time_file_reviews(con)
     red_flags = get_red_flags(con)
 
     # Print report
@@ -638,6 +1091,8 @@ def generate_report(con: duckdb.DuckDBPyConnection | None = None) -> None:
     print_header(stats)
     print_short_answer(approval_ctx, quick_large)
     print_review_depth(depth_data)
+    print_review_engagement(thread_outcomes, iteration_stats, feedback_stats)
+    print_reviewer_file_experience(reviewer_experience, first_time_reviews)
     print_module_ownership(module_data)
     print_red_flags(red_flags)
     console.print()

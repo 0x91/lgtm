@@ -50,7 +50,14 @@ class TestGitHubClient:
     async def test_rate_limit_handling(self, github_client, monkeypatch, autojump_clock):
         respx.get("https://api.github.com/test").mock(
             side_effect=[
-                httpx.Response(403, json={"message": "rate limit"}, headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(time.time()) + 1)}),
+                httpx.Response(
+                    403,
+                    json={"message": "rate limit"},
+                    headers={
+                        "X-RateLimit-Remaining": "0",
+                        "X-RateLimit-Reset": str(int(time.time()) + 1),
+                    },
+                ),
                 httpx.Response(200, json={"ok": True}),
             ]
         )
@@ -87,7 +94,9 @@ class TestGitHubClient:
     @pytest.mark.trio
     @respx.mock
     async def test_handle_rate_limit_returns_false_for_other_403(self, github_client):
-        response = httpx.Response(403, json={"message": "forbidden"}, headers={"X-RateLimit-Remaining": "100"})
+        response = httpx.Response(
+            403, json={"message": "forbidden"}, headers={"X-RateLimit-Remaining": "100"}
+        )
         assert await github_client._handle_rate_limit(response) is False
 
     @pytest.mark.slow

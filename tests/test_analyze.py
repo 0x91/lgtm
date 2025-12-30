@@ -1,48 +1,48 @@
 """Tests for analysis queries - lightweight sanity checks."""
 
-import pytest
 import duckdb
+import pytest
 
 from src.analyze import (
-    get_connection,
-    # Core metrics
-    rubber_stamp_rate,
-    time_to_review,
-    review_coverage,
-    who_reviews_whom,
-    substantive_reviewers,
     bot_activity,
-    module_coverage,
-    pr_size_vs_review,
-    # Review quality
-    review_depth,
-    review_iterations,
-    stale_approvals,
     brief_comments,
-    self_review_activity,
-    # Temporal patterns
-    review_by_time,
-    review_latency_by_author,
-    review_latency_by_module,
-    time_in_review,
-    # Team dynamics
-    review_reciprocity,
-    reviewer_load_balance,
-    # Risk indicators
-    large_pr_no_comments,
-    quick_approve_large_pr,
-    single_reviewer_merges,
     # Code review quality
     code_review_depth,
-    pr_type_review_depth,
+    collaboration_pairs,
     conventional_commits,
-    underreviewed_code,
+    get_connection,
+    informed_approvals,
+    # Risk indicators
+    large_pr_no_comments,
+    module_collaboration,
+    module_coverage,
     # Collaboration context
     module_experts,
     module_reviewers,
-    collaboration_pairs,
-    module_collaboration,
-    informed_approvals,
+    pr_size_vs_review,
+    pr_type_review_depth,
+    quick_approve_large_pr,
+    # Temporal patterns
+    review_by_time,
+    review_coverage,
+    # Review quality
+    review_depth,
+    review_iterations,
+    review_latency_by_author,
+    review_latency_by_module,
+    # Team dynamics
+    review_reciprocity,
+    reviewer_load_balance,
+    # Core metrics
+    rubber_stamp_rate,
+    self_review_activity,
+    single_reviewer_merges,
+    stale_approvals,
+    substantive_reviewers,
+    time_in_review,
+    time_to_review,
+    underreviewed_code,
+    who_reviews_whom,
 )
 from src.module_config import ModuleConfig
 
@@ -108,9 +108,15 @@ def mock_db():
     """)
 
     # Empty tables for completeness
-    con.execute("CREATE TABLE pr_comments (comment_id INT, pr_number INT, author_login VARCHAR, author_id INT, author_is_bot BOOLEAN, body VARCHAR)")
-    con.execute("CREATE TABLE checks (check_id INT, pr_number INT, name VARCHAR, status VARCHAR, conclusion VARCHAR)")
-    con.execute("CREATE TABLE timeline_events (pr_number INT, event_type VARCHAR, actor_login VARCHAR, created_at TIMESTAMP)")
+    con.execute(
+        "CREATE TABLE pr_comments (comment_id INT, pr_number INT, author_login VARCHAR, author_id INT, author_is_bot BOOLEAN, body VARCHAR)"
+    )
+    con.execute(
+        "CREATE TABLE checks (check_id INT, pr_number INT, name VARCHAR, status VARCHAR, conclusion VARCHAR)"
+    )
+    con.execute(
+        "CREATE TABLE timeline_events (pr_number INT, event_type VARCHAR, actor_login VARCHAR, created_at TIMESTAMP)"
+    )
 
     return con
 

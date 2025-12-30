@@ -1,6 +1,5 @@
 """User dimension extractor."""
 
-
 from ..models import User
 from .prs import get_bot_name, is_bot
 

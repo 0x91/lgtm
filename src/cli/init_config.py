@@ -10,9 +10,7 @@ Detects and parses:
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
-from typing import Any
 
 import yaml
 
@@ -231,7 +229,9 @@ def init_config(root: Path | None = None, output: Path | None = None) -> str:
 
     if not workspaces:
         print("No workspace configurations found.")
-        print("Supported: pnpm-workspace.yaml, package.json workspaces, pyproject.toml (uv), BUILD.bazel")
+        print(
+            "Supported: pnpm-workspace.yaml, package.json workspaces, pyproject.toml (uv), BUILD.bazel"
+        )
         print("\nGenerating minimal config with defaults...")
 
     for source, patterns in workspaces.items():

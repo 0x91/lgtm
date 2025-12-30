@@ -53,6 +53,7 @@ class TestDataExtractor:
 
             # Send SIGINT to ourselves
             import os
+
             os.kill(os.getpid(), signal.SIGINT)
 
             # Give signal time to be processed

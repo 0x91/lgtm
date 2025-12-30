@@ -10,4 +10,5 @@ def github_client_uninit():
     Use this for sync tests that don't need the async context manager.
     """
     from src.github_client import GitHubClient
+
     return GitHubClient(token="fake-token")

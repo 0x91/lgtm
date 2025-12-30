@@ -5,7 +5,6 @@ from datetime import datetime
 from ..models import PullRequest
 from ..module_config import ModuleConfig
 
-
 # Module-level config instance for bot detection
 # This gets set when the extractor is initialized
 _config: ModuleConfig | None = None

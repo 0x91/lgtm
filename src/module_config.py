@@ -12,7 +12,6 @@ from __future__ import annotations
 import fnmatch
 import re
 from dataclasses import dataclass, field
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -94,19 +93,40 @@ class ModuleRule:
 
 DEFAULT_ROOT_PATTERNS = [
     # Dotfiles and docs
-    ".*", "*.md", "*.txt",
+    ".*",
+    "*.md",
+    "*.txt",
     # Lock files and configs
-    "*.lock", "*.toml", "*.yaml", "*.yml", "*.json",
+    "*.lock",
+    "*.toml",
+    "*.yaml",
+    "*.yml",
+    "*.json",
     # Build files
-    "Makefile", "Dockerfile*",
+    "Makefile",
+    "Dockerfile*",
     # Go modules
-    "go.mod", "go.sum",
+    "go.mod",
+    "go.sum",
     # Bazel
-    "WORKSPACE", "WORKSPACE.bazel", "MODULE.bazel", "BUILD", "BUILD.bazel",
+    "WORKSPACE",
+    "WORKSPACE.bazel",
+    "MODULE.bazel",
+    "BUILD",
+    "BUILD.bazel",
     # Other common root files
-    "Gemfile", "Gemfile.lock", "Cargo.toml", "Cargo.lock",
-    "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
-    "requirements.txt", "setup.py", "setup.cfg", "pyproject.toml",
+    "Gemfile",
+    "Gemfile.lock",
+    "Cargo.toml",
+    "Cargo.lock",
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "requirements.txt",
+    "setup.py",
+    "setup.cfg",
+    "pyproject.toml",
 ]
 
 
@@ -408,5 +428,3 @@ class ModuleConfig:
                 data["bots"]["logins"] = self.bot_logins
 
         return yaml.dump(data, default_flow_style=False, sort_keys=False)
-
-

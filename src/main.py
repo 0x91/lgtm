@@ -34,12 +34,12 @@ from .config import (
 from .extractors.checks import extract_check_run
 from .extractors.comments import extract_pr_comment, extract_review_comment
 from .extractors.files import extract_file_change
-from .extractors.prs import extract_pr, set_config as set_extractor_config
+from .extractors.prs import extract_pr
+from .extractors.prs import set_config as set_extractor_config
 from .extractors.reviews import extract_review
 from .extractors.timeline import extract_timeline_event
 from .extractors.users import extract_user
 from .github_client import GitHubClient
-from .module_config import ModuleConfig
 from .models import (
     CheckRun,
     FileChange,
@@ -50,6 +50,7 @@ from .models import (
     TimelineEvent,
     User,
 )
+from .module_config import ModuleConfig
 
 # Concurrency settings
 CONCURRENT_PRS = 4  # Process this many PRs concurrently
@@ -84,6 +85,7 @@ class ExtractionState(Enum):
 @dataclass
 class ErrorRecord:
     """Record of a failed PR extraction."""
+
     pr_number: int
     error_type: str
     error_message: str
@@ -94,6 +96,7 @@ class ErrorRecord:
 @dataclass
 class ExtractionStats:
     """Live extraction statistics."""
+
     total_prs: int = 0
     processed_prs: int = 0
     failed_prs: int = 0
@@ -120,6 +123,7 @@ class ExtractionStats:
 @dataclass
 class PRDetails:
     """Results of extracting a single PR's details."""
+
     pr: PullRequest
     reviews: list[Review] = field(default_factory=list)
     pr_comments: list[PRComment] = field(default_factory=list)
@@ -203,7 +207,9 @@ class DataExtractor:
 
                 if recent_prs:
                     self.processed_prs -= recent_prs
-                    self.console.print(f"[cyan]Refreshing {len(recent_prs)} PRs from last {refresh_days} days[/]")
+                    self.console.print(
+                        f"[cyan]Refreshing {len(recent_prs)} PRs from last {refresh_days} days[/]"
+                    )
 
             # Note: skipped_prs is counted dynamically in _pr_producer()
             return True
@@ -387,11 +393,15 @@ class DataExtractor:
         self.stats.files_count += len(details.files)
         self.stats.checks_count += len(details.checks)
         self.stats.timeline_events_count += len(details.timeline_events)
-        self.stats.users_count = len(self.users)  # users dict isn't cleared, so this is still correct
+        self.stats.users_count = len(
+            self.users
+        )  # users dict isn't cleared, so this is still correct
 
         # Add to pending
         self.pending_prs.append(pr_number)
-        self.stats.processed_prs = len(self.processed_prs) + len(self.pending_prs) - self.stats.skipped_prs
+        self.stats.processed_prs = (
+            len(self.processed_prs) + len(self.pending_prs) - self.stats.skipped_prs
+        )
         self.stats.last_pr = pr_number
         self.stats.api_requests = self.client.request_count
 
@@ -437,10 +447,7 @@ class DataExtractor:
                 else:
                     # Remove rows with matching unique keys
                     new_keys = set(new_table.column(key_column).to_pylist())
-                    keep_mask = [
-                        k not in new_keys
-                        for k in existing.column(key_column).to_pylist()
-                    ]
+                    keep_mask = [k not in new_keys for k in existing.column(key_column).to_pylist()]
 
                 if any(keep_mask):
                     existing_to_keep = existing.filter(pa.array(keep_mask))
@@ -450,7 +457,9 @@ class DataExtractor:
                         )
                     except Exception as e:
                         logger.warning(f"Schema mismatch for {filename}: {e}")
-                        new_table = pa.concat_tables([existing_to_keep.cast(new_table.schema), new_table])
+                        new_table = pa.concat_tables(
+                            [existing_to_keep.cast(new_table.schema), new_table]
+                        )
 
             pq.write_table(new_table, path)
 
@@ -501,45 +510,64 @@ class DataExtractor:
         auth_str = f"[{auth_color}]{self.stats.auth_type.upper()}[/]"
 
         table.add_row(
-            "State", state_str,
-            "Auth", auth_str,
+            "State",
+            state_str,
+            "Auth",
+            auth_str,
         )
         # Show checkpoint count + new total
         checkpoint_count = len(self.processed_prs) - self.stats.processed_prs
         table.add_row(
-            "Total PRs", str(self.stats.total_prs),
-            "Rate Limit", f"{self.stats.rate_limit_remaining} remaining",
+            "Total PRs",
+            str(self.stats.total_prs),
+            "Rate Limit",
+            f"{self.stats.rate_limit_remaining} remaining",
         )
         table.add_row(
-            "Processed", f"{self.stats.processed_prs} new (+{checkpoint_count} from checkpoint)",
-            "API Requests", str(self.stats.api_requests),
+            "Processed",
+            f"{self.stats.processed_prs} new (+{checkpoint_count} from checkpoint)",
+            "API Requests",
+            str(self.stats.api_requests),
         )
         table.add_row(
-            "Failed", f"[red]{self.stats.failed_prs}[/]" if self.stats.failed_prs else "0",
-            "Last PR", f"#{self.stats.last_pr}" if self.stats.last_pr else "-",
+            "Failed",
+            f"[red]{self.stats.failed_prs}[/]" if self.stats.failed_prs else "0",
+            "Last PR",
+            f"#{self.stats.last_pr}" if self.stats.last_pr else "-",
         )
         table.add_row(
-            "Reviews", str(self.stats.reviews_count),
-            "PR Comments", str(self.stats.pr_comments_count),
+            "Reviews",
+            str(self.stats.reviews_count),
+            "PR Comments",
+            str(self.stats.pr_comments_count),
         )
         table.add_row(
-            "Review Comments", str(self.stats.review_comments_count),
-            "Files", str(self.stats.files_count),
+            "Review Comments",
+            str(self.stats.review_comments_count),
+            "Files",
+            str(self.stats.files_count),
         )
         table.add_row(
-            "Checks", str(self.stats.checks_count),
-            "Timeline Events", str(self.stats.timeline_events_count),
+            "Checks",
+            str(self.stats.checks_count),
+            "Timeline Events",
+            str(self.stats.timeline_events_count),
         )
         table.add_row(
-            "Users", str(self.stats.users_count),
-            "", "",
+            "Users",
+            str(self.stats.users_count),
+            "",
+            "",
         )
 
         if self.stats.last_error:
             table.add_row(
                 "[red]Last Error[/]",
-                f"[red]{self.stats.last_error[:80]}...[/]" if len(self.stats.last_error) > 80 else f"[red]{self.stats.last_error}[/]",
-                "", ""
+                f"[red]{self.stats.last_error[:80]}...[/]"
+                if len(self.stats.last_error) > 80
+                else f"[red]{self.stats.last_error}[/]",
+                "",
+                "",
             )
 
         return table
@@ -687,10 +715,14 @@ class DataExtractor:
         self.stats.auth_type = self.client.auth_type
         logger.info("=" * 60)
         logger.info(f"Starting extraction: {START_DATE.date()} to {END_DATE.date()}")
-        logger.info(f"Auth type: {self.stats.auth_type}, Limit: {limit}, Refresh days: {refresh_days}")
+        logger.info(
+            f"Auth type: {self.stats.auth_type}, Limit: {limit}, Refresh days: {refresh_days}"
+        )
 
         self.console.print(f"[bold]Extracting PRs from {START_DATE.date()} to {END_DATE.date()}[/]")
-        self.console.print(f"[dim]Auth: {self.stats.auth_type.upper()} | Concurrency: {CONCURRENT_PRS} PRs[/]")
+        self.console.print(
+            f"[dim]Auth: {self.stats.auth_type.upper()} | Concurrency: {CONCURRENT_PRS} PRs[/]"
+        )
 
         # Load checkpoint
         if self.load_checkpoint(refresh_days=refresh_days):
@@ -763,7 +795,9 @@ class DataExtractor:
             self.console.print("\n[dim]Run again to resume from checkpoint[/]")
 
         if self.failed_prs:
-            self.console.print(f"\n[yellow]Failed PRs logged to {RAW_DATA_DIR}/extraction_errors.json[/]")
+            self.console.print(
+                f"\n[yellow]Failed PRs logged to {RAW_DATA_DIR}/extraction_errors.json[/]"
+            )
             self.console.print("[dim]Failed PRs will be retried automatically on next run[/]")
 
 
@@ -794,8 +828,10 @@ def cli():
     parser = argparse.ArgumentParser(description="Extract GitHub PR data for code review analysis")
     parser.add_argument("--limit", "-n", type=int, help="Limit number of PRs to process")
     parser.add_argument(
-        "--refresh-days", "-r", type=int,
-        help="Re-extract PRs from the last N days (updates existing data)"
+        "--refresh-days",
+        "-r",
+        type=int,
+        help="Re-extract PRs from the last N days (updates existing data)",
     )
 
     args = parser.parse_args()

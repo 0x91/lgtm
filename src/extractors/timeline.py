@@ -1,6 +1,5 @@
 """PR timeline events extractor."""
 
-
 from ..models import TimelineEvent
 from .prs import parse_datetime_required
 

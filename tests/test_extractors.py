@@ -22,37 +22,81 @@ def make_user(**overrides) -> dict:
 
 def make_pr_data(**overrides) -> dict:
     base = {
-        "number": 123, "id": 999999, "title": "Fix bug", "body": "Desc",
-        "user": make_user(), "state": "closed", "merged": True,
-        "created_at": "2025-01-10T09:00:00Z", "updated_at": "2025-01-12T14:30:00Z",
-        "merged_at": "2025-01-12T14:00:00Z", "closed_at": "2025-01-12T14:00:00Z",
-        "additions": 50, "deletions": 20, "changed_files": 3, "commits": 2,
-        "comments": 5, "review_comments": 10, "draft": False, "merge_commit_sha": "abc123",
+        "number": 123,
+        "id": 999999,
+        "title": "Fix bug",
+        "body": "Desc",
+        "user": make_user(),
+        "state": "closed",
+        "merged": True,
+        "created_at": "2025-01-10T09:00:00Z",
+        "updated_at": "2025-01-12T14:30:00Z",
+        "merged_at": "2025-01-12T14:00:00Z",
+        "closed_at": "2025-01-12T14:00:00Z",
+        "additions": 50,
+        "deletions": 20,
+        "changed_files": 3,
+        "commits": 2,
+        "comments": 5,
+        "review_comments": 10,
+        "draft": False,
+        "merge_commit_sha": "abc123",
     }
     base.update(overrides)
     return base
 
 
 def make_review_data(**overrides) -> dict:
-    base = {"id": 111, "user": make_user(login="reviewer"), "state": "APPROVED", "body": "", "submitted_at": "2025-01-11T10:00:00Z", "commit_id": "abc123"}
+    base = {
+        "id": 111,
+        "user": make_user(login="reviewer"),
+        "state": "APPROVED",
+        "body": "",
+        "submitted_at": "2025-01-11T10:00:00Z",
+        "commit_id": "abc123",
+    }
     base.update(overrides)
     return base
 
 
 def make_comment_data(**overrides) -> dict:
-    base = {"id": 222, "user": make_user(), "body": "Great work!", "created_at": "2025-01-11T10:00:00Z", "updated_at": "2025-01-11T10:00:00Z", "reactions": {"total_count": 3}}
+    base = {
+        "id": 222,
+        "user": make_user(),
+        "body": "Great work!",
+        "created_at": "2025-01-11T10:00:00Z",
+        "updated_at": "2025-01-11T10:00:00Z",
+        "reactions": {"total_count": 3},
+    }
     base.update(overrides)
     return base
 
 
 def make_review_comment_data(**overrides) -> dict:
-    base = {"id": 333, "user": make_user(), "body": "Consider refactoring", "path": "src/main.py", "line": 42, "original_line": 40, "position": 10, "created_at": "2025-01-11T10:00:00Z", "updated_at": "2025-01-11T10:00:00Z"}
+    base = {
+        "id": 333,
+        "user": make_user(),
+        "body": "Consider refactoring",
+        "path": "src/main.py",
+        "line": 42,
+        "original_line": 40,
+        "position": 10,
+        "created_at": "2025-01-11T10:00:00Z",
+        "updated_at": "2025-01-11T10:00:00Z",
+    }
     base.update(overrides)
     return base
 
 
 def make_check_data(**overrides) -> dict:
-    base = {"id": 444, "name": "CI / Build", "status": "completed", "conclusion": "success", "started_at": "2025-01-11T10:00:00Z", "completed_at": "2025-01-11T10:05:00Z"}
+    base = {
+        "id": 444,
+        "name": "CI / Build",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2025-01-11T10:00:00Z",
+        "completed_at": "2025-01-11T10:05:00Z",
+    }
     base.update(overrides)
     return base
 
@@ -77,21 +121,24 @@ class TestExtractModule:
 
         set_module_config(ModuleConfig.default())
 
-    @pytest.mark.parametrize("path,expected", [
-        # Default patterns
-        ("src/utils/helper.py", "src/utils"),
-        ("src/main.py", "src/main.py"),  # {name} captures filename
-        ("packages/ui-kit/Button.tsx", "packages/ui-kit"),
-        ("apps/web/pages/index.tsx", "apps/web"),
-        (".github/workflows/ci.yml", ".github"),
-        # Root files
-        ("README.md", "root"),
-        (".gitignore", "root"),
-        ("", "root"),
-        # Fallback to default_depth=2
-        ("backend/py/tools/main.py", "backend/py"),
-        ("some/deep/nested/file.py", "some/deep"),
-    ])
+    @pytest.mark.parametrize(
+        "path,expected",
+        [
+            # Default patterns
+            ("src/utils/helper.py", "src/utils"),
+            ("src/main.py", "src/main.py"),  # {name} captures filename
+            ("packages/ui-kit/Button.tsx", "packages/ui-kit"),
+            ("apps/web/pages/index.tsx", "apps/web"),
+            (".github/workflows/ci.yml", ".github"),
+            # Root files
+            ("README.md", "root"),
+            (".gitignore", "root"),
+            ("", "root"),
+            # Fallback to default_depth=2
+            ("backend/py/tools/main.py", "backend/py"),
+            ("some/deep/nested/file.py", "some/deep"),
+        ],
+    )
     def test_extract_module(self, path: str, expected: str):
         assert extract_module(path) == expected
 
@@ -190,7 +237,16 @@ class TestExtractFileChange:
 
     def test_basic_file(self):
         # Uses default_depth=2 fallback for unmatched paths
-        fc = extract_file_change(123, {"filename": "backend/py/api/handler.py", "status": "modified", "additions": 10, "deletions": 5, "changes": 15})
+        fc = extract_file_change(
+            123,
+            {
+                "filename": "backend/py/api/handler.py",
+                "status": "modified",
+                "additions": 10,
+                "deletions": 5,
+                "changes": 15,
+            },
+        )
         assert fc.pr_number == 123
         assert fc.module == "backend/py"  # default_depth=2
         assert fc.additions == 10
@@ -213,11 +269,15 @@ class TestExtractReview:
         assert review.reviewer_is_bot is False
 
     def test_bot_reviewer(self):
-        review = extract_review(123, make_review_data(user=make_user(login="cursor[bot]", type="Bot")))
+        review = extract_review(
+            123, make_review_data(user=make_user(login="cursor[bot]", type="Bot"))
+        )
         assert review.reviewer_is_bot is True
 
     def test_changes_requested(self):
-        review = extract_review(123, make_review_data(state="CHANGES_REQUESTED", body="Please fix the bug"))
+        review = extract_review(
+            123, make_review_data(state="CHANGES_REQUESTED", body="Please fix the bug")
+        )
         assert review.state == "CHANGES_REQUESTED"
         assert review.body == "Please fix the bug"
 
@@ -243,7 +303,9 @@ class TestExtractPrComment:
         assert comment.reactions_total == 0
 
     def test_bot_author(self):
-        comment = extract_pr_comment(123, make_comment_data(user=make_user(login="bot[bot]", type="Bot")))
+        comment = extract_pr_comment(
+            123, make_comment_data(user=make_user(login="bot[bot]", type="Bot"))
+        )
         assert comment.author_is_bot is True
 
 
@@ -258,7 +320,9 @@ class TestExtractReviewComment:
         assert comment.is_outdated is False
 
     def test_line_falls_back_to_original_line(self):
-        comment = extract_review_comment(123, make_review_comment_data(line=None, original_line=100))
+        comment = extract_review_comment(
+            123, make_review_comment_data(line=None, original_line=100)
+        )
         assert comment.line == 100
 
     def test_outdated_when_position_none(self):
@@ -276,7 +340,9 @@ class TestExtractCheckRun:
         assert check.duration_seconds == 300  # 5 minutes
 
     def test_in_progress_check(self):
-        check = extract_check_run(123, make_check_data(status="in_progress", conclusion=None, completed_at=None))
+        check = extract_check_run(
+            123, make_check_data(status="in_progress", conclusion=None, completed_at=None)
+        )
         assert check.conclusion is None
         assert check.duration_seconds is None
 

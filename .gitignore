@@ -2,6 +2,9 @@
 data/
 lgtm.yaml
 
+# One-off scripts (not part of main project)
+scripts/
+
 # Environment
 .env
 *.pem

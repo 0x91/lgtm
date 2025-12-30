@@ -39,7 +39,9 @@ class GitHubAppAuth:
 
         self._token: str | None = None
         self._token_expires_at: datetime | None = None
-        self._refresh_lock: trio.Lock | None = None  # Lazy init to avoid trio import at module level
+        self._refresh_lock: trio.Lock | None = (
+            None  # Lazy init to avoid trio import at module level
+        )
 
     def _generate_jwt(self) -> str:
         """Generate a JWT for GitHub App authentication."""
@@ -232,7 +234,9 @@ class GitHubClient:
             if remaining == 0:
                 reset_time = int(response.headers.get("X-RateLimit-Reset", 0))
                 wait_seconds = max(reset_time - time.time(), 60)
-                logger.warning(f"Rate limited (primary). Waiting {wait_seconds:.0f}s until reset...")
+                logger.warning(
+                    f"Rate limited (primary). Waiting {wait_seconds:.0f}s until reset..."
+                )
                 await trio.sleep(wait_seconds + 1)
                 return True
 

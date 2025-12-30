@@ -30,7 +30,15 @@ def get_connection() -> duckdb.DuckDBPyConnection:
     con = duckdb.connect()
 
     # Register base tables as views
-    for table in ["prs", "reviews", "pr_comments", "review_comments", "checks", "timeline_events", "users"]:
+    for table in [
+        "prs",
+        "reviews",
+        "pr_comments",
+        "review_comments",
+        "checks",
+        "timeline_events",
+        "users",
+    ]:
         path = DATA_DIR / f"{table}.parquet"
         if path.exists():
             con.execute(f"CREATE VIEW {table} AS SELECT * FROM '{path}'")
@@ -78,7 +86,10 @@ def run_query(con: duckdb.DuckDBPyConnection, title: str, query: str) -> None:
 
 def rubber_stamp_rate(con: duckdb.DuckDBPyConnection) -> None:
     """Analyze empty approval rate by reviewer."""
-    run_query(con, "Rubber Stamp Rate (Empty Approvals)", """
+    run_query(
+        con,
+        "Rubber Stamp Rate (Empty Approvals)",
+        """
         SELECT
             reviewer_login,
             COUNT(*) as approvals,
@@ -90,12 +101,16 @@ def rubber_stamp_rate(con: duckdb.DuckDBPyConnection) -> None:
         HAVING COUNT(*) >= 10
         ORDER BY approvals DESC
         LIMIT 20
-    """)
+    """,
+    )
 
 
 def time_to_review(con: duckdb.DuckDBPyConnection) -> None:
     """Analyze time to first review."""
-    run_query(con, "Time to First Review", """
+    run_query(
+        con,
+        "Time to First Review",
+        """
         WITH pr_first_review AS (
             SELECT
                 p.pr_number,
@@ -112,12 +127,16 @@ def time_to_review(con: duckdb.DuckDBPyConnection) -> None:
             ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (first_review_at - pr_created)) / 3600), 1) as p90_hours,
             COUNT(*) as prs
         FROM pr_first_review
-    """)
+    """,
+    )
 
 
 def review_coverage(con: duckdb.DuckDBPyConnection) -> None:
     """Analyze what percentage of PRs get human reviews."""
-    run_query(con, "Review Coverage", """
+    run_query(
+        con,
+        "Review Coverage",
+        """
         SELECT
             CASE
                 WHEN human_reviews > 0 THEN 'Human reviewed'
@@ -137,12 +156,16 @@ def review_coverage(con: duckdb.DuckDBPyConnection) -> None:
         )
         GROUP BY 1
         ORDER BY prs DESC
-    """)
+    """,
+    )
 
 
 def who_reviews_whom(con: duckdb.DuckDBPyConnection) -> None:
     """Show top reviewer-author pairs."""
-    run_query(con, "Top Reviewer-Author Pairs", """
+    run_query(
+        con,
+        "Top Reviewer-Author Pairs",
+        """
         SELECT
             r.reviewer_login as reviewer,
             p.author_login as author,
@@ -156,12 +179,16 @@ def who_reviews_whom(con: duckdb.DuckDBPyConnection) -> None:
         GROUP BY 1, 2
         ORDER BY reviews DESC
         LIMIT 15
-    """)
+    """,
+    )
 
 
 def substantive_reviewers(con: duckdb.DuckDBPyConnection) -> None:
     """Find reviewers who leave inline code comments."""
-    run_query(con, "Substantive Reviewers (Inline Comments)", """
+    run_query(
+        con,
+        "Substantive Reviewers (Inline Comments)",
+        """
         SELECT
             author_login as reviewer,
             COUNT(*) as inline_comments,
@@ -171,12 +198,16 @@ def substantive_reviewers(con: duckdb.DuckDBPyConnection) -> None:
         GROUP BY 1
         ORDER BY inline_comments DESC
         LIMIT 15
-    """)
+    """,
+    )
 
 
 def bot_activity(con: duckdb.DuckDBPyConnection) -> None:
     """Show bot review activity."""
-    run_query(con, "Bot Activity", """
+    run_query(
+        con,
+        "Bot Activity",
+        """
         SELECT
             u.bot_name,
             COUNT(DISTINCT r.pr_number) as prs_touched,
@@ -188,7 +219,8 @@ def bot_activity(con: duckdb.DuckDBPyConnection) -> None:
         WHERE r.reviewer_is_bot AND u.bot_name IS NOT NULL
         GROUP BY 1
         ORDER BY prs_touched DESC
-    """)
+    """,
+    )
 
 
 def module_coverage(con: duckdb.DuckDBPyConnection) -> None:
@@ -196,7 +228,10 @@ def module_coverage(con: duckdb.DuckDBPyConnection) -> None:
 
     Uses precomputed module column from files table.
     """
-    run_query(con, "Module Review Coverage", """
+    run_query(
+        con,
+        "Module Review Coverage",
+        """
         WITH module_stats AS (
             SELECT
                 f.computed_module as mod,
@@ -217,12 +252,16 @@ def module_coverage(con: duckdb.DuckDBPyConnection) -> None:
         WHERE prs >= 10
         ORDER BY prs DESC
         LIMIT 20
-    """)
+    """,
+    )
 
 
 def pr_size_vs_review(con: duckdb.DuckDBPyConnection) -> None:
     """Analyze if larger PRs get more review attention."""
-    run_query(con, "PR Size vs Review Activity", """
+    run_query(
+        con,
+        "PR Size vs Review Activity",
+        """
         WITH pr_stats AS (
             SELECT
                 p.pr_number,
@@ -255,7 +294,8 @@ def pr_size_vs_review(con: duckdb.DuckDBPyConnection) -> None:
                 WHEN 'L (201-500)' THEN 4
                 ELSE 5
             END
-    """)
+    """,
+    )
 
 
 # === Review Quality Metrics ===
@@ -263,7 +303,10 @@ def pr_size_vs_review(con: duckdb.DuckDBPyConnection) -> None:
 
 def review_depth(con: duckdb.DuckDBPyConnection) -> None:
     """Analyze reviews with inline comments vs just approvals."""
-    run_query(con, "Review Depth (Inline Comments per Reviewer)", """
+    run_query(
+        con,
+        "Review Depth (Inline Comments per Reviewer)",
+        """
         SELECT
             r.reviewer_login,
             COUNT(DISTINCT r.review_id) as reviews,
@@ -279,12 +322,16 @@ def review_depth(con: duckdb.DuckDBPyConnection) -> None:
         HAVING COUNT(DISTINCT r.review_id) >= 10
         ORDER BY comments_per_review DESC
         LIMIT 20
-    """)
+    """,
+    )
 
 
 def review_iterations(con: duckdb.DuckDBPyConnection) -> None:
     """Analyze how many rounds of changes_requested → re-review per PR."""
-    run_query(con, "Review Iterations (Rounds of Feedback)", """
+    run_query(
+        con,
+        "Review Iterations (Rounds of Feedback)",
+        """
         WITH review_rounds AS (
             SELECT
                 pr_number,
@@ -313,12 +360,16 @@ def review_iterations(con: duckdb.DuckDBPyConnection) -> None:
                 WHEN '2 rounds of changes' THEN 3
                 ELSE 4
             END
-    """)
+    """,
+    )
 
 
 def stale_approvals(con: duckdb.DuckDBPyConnection) -> None:
     """Find PRs where commits were pushed after approval."""
-    run_query(con, "Stale Approvals (Commits After Approval)", """
+    run_query(
+        con,
+        "Stale Approvals (Commits After Approval)",
+        """
         WITH last_approval AS (
             SELECT pr_number, MAX(submitted_at) as approved_at
             FROM reviews
@@ -347,12 +398,16 @@ def stale_approvals(con: duckdb.DuckDBPyConnection) -> None:
         FROM pr_activity
         ORDER BY hours_after_approval DESC
         LIMIT 20
-    """)
+    """,
+    )
 
 
 def brief_comments(con: duckdb.DuckDBPyConnection) -> None:
     """Find reviewers who leave short comments."""
-    run_query(con, "Brief Comments Analysis", """
+    run_query(
+        con,
+        "Brief Comments Analysis",
+        """
         WITH comment_stats AS (
             SELECT
                 author_login,
@@ -375,12 +430,16 @@ def brief_comments(con: duckdb.DuckDBPyConnection) -> None:
         FROM comment_stats
         ORDER BY low_value_pct DESC
         LIMIT 15
-    """)
+    """,
+    )
 
 
 def self_review_activity(con: duckdb.DuckDBPyConnection) -> None:
     """Find authors commenting on their own PRs."""
-    run_query(con, "Self-Review Activity (Authors on Own PRs)", """
+    run_query(
+        con,
+        "Self-Review Activity (Authors on Own PRs)",
+        """
         SELECT
             p.author_login,
             COUNT(DISTINCT p.pr_number) as total_prs,
@@ -395,7 +454,8 @@ def self_review_activity(con: duckdb.DuckDBPyConnection) -> None:
         HAVING COUNT(DISTINCT p.pr_number) >= 10
         ORDER BY self_review_pct DESC
         LIMIT 15
-    """)
+    """,
+    )
 
 
 # === Temporal Patterns ===
@@ -403,7 +463,10 @@ def self_review_activity(con: duckdb.DuckDBPyConnection) -> None:
 
 def review_by_time(con: duckdb.DuckDBPyConnection) -> None:
     """Analyze review activity by hour and day of week."""
-    run_query(con, "Review Activity by Day of Week", """
+    run_query(
+        con,
+        "Review Activity by Day of Week",
+        """
         SELECT
             CASE DAYOFWEEK(submitted_at)
                 WHEN 0 THEN 'Sunday'
@@ -420,12 +483,16 @@ def review_by_time(con: duckdb.DuckDBPyConnection) -> None:
         WHERE NOT reviewer_is_bot
         GROUP BY DAYOFWEEK(submitted_at)
         ORDER BY DAYOFWEEK(submitted_at)
-    """)
+    """,
+    )
 
 
 def review_latency_by_author(con: duckdb.DuckDBPyConnection) -> None:
     """Analyze which authors wait longest for reviews."""
-    run_query(con, "Review Latency by Author (Who Waits Longest?)", """
+    run_query(
+        con,
+        "Review Latency by Author (Who Waits Longest?)",
+        """
         WITH pr_first_review AS (
             SELECT
                 p.pr_number,
@@ -448,12 +515,16 @@ def review_latency_by_author(con: duckdb.DuckDBPyConnection) -> None:
         HAVING COUNT(*) >= 10
         ORDER BY avg_hours DESC
         LIMIT 15
-    """)
+    """,
+    )
 
 
 def review_latency_by_module(con: duckdb.DuckDBPyConnection) -> None:
     """Analyze which modules get slow reviews."""
-    run_query(con, "Review Latency by Module", """
+    run_query(
+        con,
+        "Review Latency by Module",
+        """
         WITH pr_first_review AS (
             SELECT
                 p.pr_number,
@@ -479,12 +550,16 @@ def review_latency_by_module(con: duckdb.DuckDBPyConnection) -> None:
         HAVING COUNT(DISTINCT pfr.pr_number) >= 20
         ORDER BY avg_hours DESC
         LIMIT 15
-    """)
+    """,
+    )
 
 
 def time_in_review(con: duckdb.DuckDBPyConnection) -> None:
     """Analyze total time from first review to merge."""
-    run_query(con, "Time in Review (First Review to Merge)", """
+    run_query(
+        con,
+        "Time in Review (First Review to Merge)",
+        """
         WITH pr_review_times AS (
             SELECT
                 p.pr_number,
@@ -515,7 +590,8 @@ def time_in_review(con: duckdb.DuckDBPyConnection) -> None:
                 WHEN '1-3 days' THEN 4
                 ELSE 5
             END
-    """)
+    """,
+    )
 
 
 # === Team Dynamics ===
@@ -523,7 +599,10 @@ def time_in_review(con: duckdb.DuckDBPyConnection) -> None:
 
 def review_reciprocity(con: duckdb.DuckDBPyConnection) -> None:
     """Analyze if people review each other equally."""
-    run_query(con, "Review Reciprocity (Mutual Review Pairs)", """
+    run_query(
+        con,
+        "Review Reciprocity (Mutual Review Pairs)",
+        """
         WITH review_pairs AS (
             SELECT
                 r.reviewer_login,
@@ -548,12 +627,16 @@ def review_reciprocity(con: duckdb.DuckDBPyConnection) -> None:
             AND a.author_login = b.reviewer_login
         ORDER BY a.reviews_given + COALESCE(b.reviews_given, 0) DESC
         LIMIT 20
-    """)
+    """,
+    )
 
 
 def reviewer_load_balance(con: duckdb.DuckDBPyConnection) -> None:
     """Analyze distribution of review work."""
-    run_query(con, "Reviewer Load Balance", """
+    run_query(
+        con,
+        "Reviewer Load Balance",
+        """
         WITH reviewer_stats AS (
             SELECT
                 reviewer_login,
@@ -576,7 +659,8 @@ def reviewer_load_balance(con: duckdb.DuckDBPyConnection) -> None:
         CROSS JOIN totals t
         ORDER BY prs_reviewed DESC
         LIMIT 20
-    """)
+    """,
+    )
 
 
 # === Risk Indicators ===
@@ -584,7 +668,10 @@ def reviewer_load_balance(con: duckdb.DuckDBPyConnection) -> None:
 
 def large_pr_no_comments(con: duckdb.DuckDBPyConnection) -> None:
     """Find large PRs that received no inline feedback."""
-    run_query(con, "Risk: Large PRs with No Inline Comments", """
+    run_query(
+        con,
+        "Risk: Large PRs with No Inline Comments",
+        """
         WITH pr_comments AS (
             SELECT
                 p.pr_number,
@@ -606,12 +693,16 @@ def large_pr_no_comments(con: duckdb.DuckDBPyConnection) -> None:
         WHERE lines_changed >= 200 AND inline_comments = 0
         ORDER BY lines_changed DESC
         LIMIT 20
-    """)
+    """,
+    )
 
 
 def quick_approve_large_pr(con: duckdb.DuckDBPyConnection) -> None:
     """Find large PRs approved suspiciously quickly."""
-    run_query(con, "Risk: Quick Approvals on Large PRs (<5 min)", """
+    run_query(
+        con,
+        "Risk: Quick Approvals on Large PRs (<5 min)",
+        """
         WITH first_approval AS (
             SELECT
                 r.pr_number,
@@ -632,12 +723,16 @@ def quick_approve_large_pr(con: duckdb.DuckDBPyConnection) -> None:
           AND p.merged
         ORDER BY lines_changed DESC
         LIMIT 20
-    """)
+    """,
+    )
 
 
 def single_reviewer_merges(con: duckdb.DuckDBPyConnection) -> None:
     """Find PRs merged with only one human reviewer."""
-    run_query(con, "Risk: Single Reviewer Merges", """
+    run_query(
+        con,
+        "Risk: Single Reviewer Merges",
+        """
         WITH pr_reviewers AS (
             SELECT
                 pr_number,
@@ -666,7 +761,8 @@ def single_reviewer_merges(con: duckdb.DuckDBPyConnection) -> None:
                 WHEN 'Two reviewers' THEN 3
                 ELSE 4
             END
-    """)
+    """,
+    )
 
 
 def code_review_depth(con: duckdb.DuckDBPyConnection) -> None:
@@ -674,7 +770,10 @@ def code_review_depth(con: duckdb.DuckDBPyConnection) -> None:
 
     Key metric: Are reviewers engaging with real code, or just approving?
     """
-    run_query(con, "Review Depth on Real Code (Excluding Generated)", """
+    run_query(
+        con,
+        "Review Depth on Real Code (Excluding Generated)",
+        """
         WITH pr_code_churn AS (
             SELECT
                 pr_number,
@@ -716,7 +815,8 @@ def code_review_depth(con: duckdb.DuckDBPyConnection) -> None:
                 WHEN 'Large (201-500)' THEN 3
                 ELSE 4
             END
-    """)
+    """,
+    )
 
 
 def pr_type_review_depth(con: duckdb.DuckDBPyConnection) -> None:
@@ -727,7 +827,10 @@ def pr_type_review_depth(con: duckdb.DuckDBPyConnection) -> None:
     - refactor: 15-85% additions (restructuring existing code)
     - cleanup: <15% additions (removing/simplifying)
     """
-    run_query(con, "Review Depth by PR Type (New vs Refactor vs Cleanup)", """
+    run_query(
+        con,
+        "Review Depth by PR Type (New vs Refactor vs Cleanup)",
+        """
         WITH pr_churn AS (
             SELECT
                 pr_number,
@@ -771,7 +874,8 @@ def pr_type_review_depth(con: duckdb.DuckDBPyConnection) -> None:
         FROM review_stats
         GROUP BY 1
         ORDER BY prs DESC
-    """)
+    """,
+    )
 
 
 def conventional_commits(con: duckdb.DuckDBPyConnection) -> None:
@@ -779,7 +883,10 @@ def conventional_commits(con: duckdb.DuckDBPyConnection) -> None:
 
     Checks for prefixes like feat:, fix:, chore:, docs:, refactor:, etc.
     """
-    run_query(con, "Conventional Commit Adoption by Author", """
+    run_query(
+        con,
+        "Conventional Commit Adoption by Author",
+        """
         WITH commit_types AS (
             SELECT
                 author_login,
@@ -800,7 +907,8 @@ def conventional_commits(con: duckdb.DuckDBPyConnection) -> None:
         HAVING COUNT(*) >= 20
         ORDER BY conventional_pct DESC
         LIMIT 15
-    """)
+    """,
+    )
 
 
 def underreviewed_code(con: duckdb.DuckDBPyConnection) -> None:
@@ -808,7 +916,10 @@ def underreviewed_code(con: duckdb.DuckDBPyConnection) -> None:
 
     These are PRs with significant actual code changes but no substantive review.
     """
-    run_query(con, "Risk: Large Code PRs with No Substantive Review", """
+    run_query(
+        con,
+        "Risk: Large Code PRs with No Substantive Review",
+        """
         WITH pr_stats AS (
             SELECT
                 p.pr_number,
@@ -835,7 +946,8 @@ def underreviewed_code(con: duckdb.DuckDBPyConnection) -> None:
           AND NOT had_changes_requested
         ORDER BY code_churn DESC
         LIMIT 20
-    """)
+    """,
+    )
 
 
 # === Collaboration Context ===
@@ -847,7 +959,10 @@ def module_experts(con: duckdb.DuckDBPyConnection) -> None:
     Module experts are people who deeply understand an area of the codebase.
     Their reviews of that area carry more weight.
     """
-    run_query(con, "Module Experts (Top Authors per Module)", """
+    run_query(
+        con,
+        "Module Experts (Top Authors per Module)",
+        """
         WITH author_module_stats AS (
             SELECT
                 f.computed_module as module,
@@ -873,7 +988,8 @@ def module_experts(con: duckdb.DuckDBPyConnection) -> None:
         FROM ranked
         WHERE rank <= 3
         ORDER BY module, rank
-    """)
+    """,
+    )
 
 
 def module_reviewers(con: duckdb.DuckDBPyConnection) -> None:
@@ -881,7 +997,10 @@ def module_reviewers(con: duckdb.DuckDBPyConnection) -> None:
 
     Frequent reviewers of a module develop expertise even without authoring.
     """
-    run_query(con, "Module Reviewers (Top Reviewers per Module)", """
+    run_query(
+        con,
+        "Module Reviewers (Top Reviewers per Module)",
+        """
         WITH reviewer_module_stats AS (
             SELECT
                 f.computed_module as module,
@@ -909,7 +1028,8 @@ def module_reviewers(con: duckdb.DuckDBPyConnection) -> None:
         FROM ranked
         WHERE rank <= 3
         ORDER BY module, rank
-    """)
+    """,
+    )
 
 
 def collaboration_pairs(con: duckdb.DuckDBPyConnection) -> None:
@@ -918,7 +1038,10 @@ def collaboration_pairs(con: duckdb.DuckDBPyConnection) -> None:
     High collaboration count suggests the reviewer knows the author's style
     and the areas they work in.
     """
-    run_query(con, "Collaboration History (Author-Reviewer Pairs)", """
+    run_query(
+        con,
+        "Collaboration History (Author-Reviewer Pairs)",
+        """
         WITH pair_stats AS (
             SELECT
                 p.author_login as author,
@@ -947,7 +1070,8 @@ def collaboration_pairs(con: duckdb.DuckDBPyConnection) -> None:
         WHERE prs_together >= 10
         ORDER BY prs_together DESC
         LIMIT 20
-    """)
+    """,
+    )
 
 
 def module_collaboration(con: duckdb.DuckDBPyConnection) -> None:
@@ -956,7 +1080,10 @@ def module_collaboration(con: duckdb.DuckDBPyConnection) -> None:
     A quick approval from someone who has reviewed 50 of your PRs in this module
     is very different from a quick approval from a stranger.
     """
-    run_query(con, "Module Collaboration (Who Reviews Whom Where)", """
+    run_query(
+        con,
+        "Module Collaboration (Who Reviews Whom Where)",
+        """
         WITH module_pairs AS (
             SELECT
                 f.computed_module as module,
@@ -985,7 +1112,8 @@ def module_collaboration(con: duckdb.DuckDBPyConnection) -> None:
         WHERE prs_in_module >= 5
         ORDER BY prs_in_module DESC
         LIMIT 30
-    """)
+    """,
+    )
 
 
 def informed_approvals(con: duckdb.DuckDBPyConnection) -> None:
@@ -994,7 +1122,10 @@ def informed_approvals(con: duckdb.DuckDBPyConnection) -> None:
     An empty approval might be informed (reviewer knows the code well)
     or uninformed (first time reviewing this author/module).
     """
-    run_query(con, "Approval Context (Informed vs First-Time)", """
+    run_query(
+        con,
+        "Approval Context (Informed vs First-Time)",
+        """
         WITH approval_context AS (
             SELECT
                 r.pr_number,
@@ -1055,7 +1186,8 @@ def informed_approvals(con: duckdb.DuckDBPyConnection) -> None:
                 WHEN 'Some history (3-9)' THEN 3
                 ELSE 4
             END
-    """)
+    """,
+    )
 
 
 def main() -> None:

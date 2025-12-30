@@ -17,6 +17,8 @@ dependencies = [
     "pyyaml>=6.0.3",
     "tomli ; python_full_version < '3.11'",
     "pytz>=2025.2",
+    "nltk>=3.9.2",
+    "litellm>=1.80.11",
 ]
 
 [project.scripts]

@@ -1,17 +1,17 @@
 """Tests for the narrative report generator."""
 
-import pytest
 import duckdb
+import pytest
 
+from src.module_config import ModuleConfig
 from src.report import (
-    format_pct,
     format_hours,
     format_minutes,
-    get_summary_stats,
+    format_pct,
     get_approval_context,
     get_review_depth_by_type,
+    get_summary_stats,
 )
-from src.module_config import ModuleConfig
 
 
 class TestFormatters:

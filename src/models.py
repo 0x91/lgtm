@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 class PullRequest(BaseModel):
     """Pull request data."""
+
     pr_number: int
     pr_id: int
     title: str
@@ -32,6 +33,7 @@ class PullRequest(BaseModel):
 
 class Review(BaseModel):
     """PR review data."""
+
     review_id: int
     pr_number: int
     reviewer_login: str
@@ -45,6 +47,7 @@ class Review(BaseModel):
 
 class PRComment(BaseModel):
     """PR-level comment (issue comment on PR)."""
+
     comment_id: int
     pr_number: int
     author_login: str
@@ -58,6 +61,7 @@ class PRComment(BaseModel):
 
 class ReviewComment(BaseModel):
     """Inline code review comment."""
+
     comment_id: str
     pr_number: int
     author_login: str
@@ -74,6 +78,7 @@ class ReviewComment(BaseModel):
 
 class FileChange(BaseModel):
     """File changed in a PR."""
+
     pr_number: int
     filename: str
     status: str
@@ -85,6 +90,7 @@ class FileChange(BaseModel):
 
 class CheckRun(BaseModel):
     """CI check run."""
+
     check_id: int
     pr_number: int
     name: str
@@ -97,6 +103,7 @@ class CheckRun(BaseModel):
 
 class TimelineEvent(BaseModel):
     """PR timeline event."""
+
     pr_number: int
     event_type: str
     actor_login: str | None
@@ -107,6 +114,7 @@ class TimelineEvent(BaseModel):
 
 class User(BaseModel):
     """User dimension."""
+
     user_id: int
     login: str
     is_bot: bool

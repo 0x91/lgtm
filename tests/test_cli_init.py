@@ -1,14 +1,9 @@
 """Tests for lgtm init config generation."""
 
 import json
-from pathlib import Path
 from textwrap import dedent
 
-import pytest
-import yaml
-
 from src.cli.init_config import (
-    detect_workspaces,
     dir_to_rule,
     find_npm_workspaces,
     find_pnpm_workspaces,
@@ -103,7 +98,9 @@ class TestFindNpmWorkspaces:
     def test_object_format(self, tmp_path):
         """Parses object workspaces format with packages key."""
         package_json = tmp_path / "package.json"
-        package_json.write_text(json.dumps({"workspaces": {"packages": ["packages/*"], "nohoist": ["**/react"]}}))
+        package_json.write_text(
+            json.dumps({"workspaces": {"packages": ["packages/*"], "nohoist": ["**/react"]}})
+        )
 
         result = find_npm_workspaces(tmp_path)
         assert "packages/*" in result
