@@ -113,6 +113,39 @@ def main():
         description="Start an MCP (Model Context Protocol) server that allows AI assistants to query code review data.",
     )
 
+    # chat command - interactive AI chat
+    chat_parser = subparsers.add_parser(
+        "chat",
+        help="Interactive AI chat for exploring code review patterns (requires lgtm[ai])",
+        description="Start an interactive chat session to explore code review patterns using AI.",
+    )
+    chat_parser.add_argument(
+        "--model",
+        "-m",
+        type=str,
+        default="claude-sonnet-4-20250514",
+        help="LLM model to use (e.g., claude-sonnet-4-20250514, gpt-4o, gemini/gemini-1.5-pro)",
+    )
+
+    # ask command - one-shot query
+    ask_parser = subparsers.add_parser(
+        "ask",
+        help="Ask a single question about code review patterns (requires lgtm[ai])",
+        description="Ask a question and get an answer without entering interactive mode.",
+    )
+    ask_parser.add_argument(
+        "question",
+        type=str,
+        help="Question to ask about code review patterns",
+    )
+    ask_parser.add_argument(
+        "--model",
+        "-m",
+        type=str,
+        default="claude-sonnet-4-20250514",
+        help="LLM model to use",
+    )
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -141,6 +174,22 @@ def main():
         from ..mcp_server import main as mcp_main
 
         mcp_main()
+
+    elif args.command == "chat":
+        from ..chat.tui import main as chat_main
+
+        chat_main(model=args.model)
+
+    elif args.command == "ask":
+        from ..chat.agent import LGTMAgent
+
+        try:
+            agent = LGTMAgent(model=args.model)
+            response = agent.chat(args.question)
+            print(response)
+        except ImportError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
 
     elif args.command is None:
         parser.print_help()

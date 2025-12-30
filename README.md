@@ -56,6 +56,8 @@ uv tool install 'lgtm[all]'        # All optional features
 | `lgtm report` | Generate narrative report answering "Is review adding value?" |
 | `lgtm analyze` | Run all 35 analysis queries (raw table output) |
 | `lgtm init` | Auto-generate `lgtm.yaml` from package manager workspaces |
+| `lgtm chat` | Interactive AI chat for exploring code review patterns (requires `lgtm[ai]`) |
+| `lgtm ask` | Ask a single question about code review patterns (requires `lgtm[ai]`) |
 | `lgtm mcp` | Start MCP server for AI assistant integration (requires `lgtm[ai]`) |
 
 ### Fetch Options
@@ -305,21 +307,79 @@ GITHUB_APP_INSTALLATION_ID=12345678
 GITHUB_APP_PRIVATE_KEY_PATH=./your-app.pem
 ```
 
-## AI/MCP Integration
+## AI Chat Interface
 
-The MCP (Model Context Protocol) server allows AI assistants like Claude to query your code review data directly.
+Talk to your code review data using natural language. Supports Claude, OpenAI, and Gemini.
 
-### Setup
+### Interactive Chat
 
 ```bash
 # Install with AI extras
 uv tool install 'lgtm[ai]'
 
+# Start interactive chat (uses Claude by default)
+lgtm chat
+
+# Use a different model
+lgtm chat --model gpt-4o
+lgtm chat --model gemini/gemini-1.5-pro
+```
+
+### One-shot Questions
+
+```bash
+# Ask a single question
+lgtm ask "Who does the most code reviews?"
+lgtm ask "What modules have the slowest review times?" --model gpt-4o
+```
+
+### Example Conversations
+
+```
+You: Who reviews the most PRs?
+
+LGTM: Looking at the review data...
+
+Top reviewers by volume:
+1. alice - 342 reviews (32% of all human reviews)
+2. bob - 298 reviews (28%)
+
+Context: alice reviews across 12 different modules, suggesting a
+senior/staff role. bob focuses almost entirely on frontend/ (94%).
+
+Worth exploring: Is alice's load sustainable?
+```
+
+### Configuration
+
+Set your API key for your preferred provider:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-xxx  # For Claude
+export OPENAI_API_KEY=sk-xxx         # For OpenAI
+export GEMINI_API_KEY=xxx            # For Gemini
+```
+
+Optionally add team context in `lgtm.yaml`:
+
+```yaml
+chat:
+  model: claude-sonnet-4-20250514
+  custom_context: |
+    Our team values async code review. Fast approvals
+    are expected for small, well-tested changes.
+```
+
+## MCP Server Integration
+
+For AI assistants like Claude Desktop, you can expose the tools via MCP:
+
+```bash
 # Start the MCP server
 lgtm mcp
 ```
 
-Or add to your Claude Code settings (`.claude/settings.json`):
+Add to Claude Desktop settings (`.claude/settings.json`):
 
 ```json
 {
@@ -340,14 +400,6 @@ Or add to your Claude Code settings (`.claude/settings.json`):
 | `get_red_flags` | Find PRs that may have slipped through review |
 | `get_reviewer_stats` | Detailed stats for a specific reviewer |
 | `get_author_stats` | Detailed stats for a specific PR author |
-
-### Example Queries
-
-Ask Claude:
-- "What's the overview of our code review data?"
-- "Who rubber-stamps the most PRs?"
-- "Show me large PRs that were approved quickly with no comments"
-- "What are Charlie's review stats?"
 
 ## License
 
