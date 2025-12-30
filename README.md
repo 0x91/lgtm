@@ -20,8 +20,8 @@ uv run lgtm init
 # Extract PR data from GitHub
 uv run lgtm extract
 
-# Run analysis queries
-uv run lgtm analyze
+# Generate the narrative report
+uv run lgtm report
 ```
 
 ## Commands
@@ -30,7 +30,8 @@ uv run lgtm analyze
 |---------|-------------|
 | `lgtm init` | Auto-generate `lgtm.yaml` from package manager workspaces |
 | `lgtm extract` | Pull PR/review data from GitHub API into Parquet files |
-| `lgtm analyze` | Run all 35 analysis queries on extracted data |
+| `lgtm report` | Generate narrative report answering "Is review adding value?" |
+| `lgtm analyze` | Run all 35 analysis queries (raw table output) |
 
 ## Analysis Queries
 

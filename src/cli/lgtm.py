@@ -62,11 +62,11 @@ def main():
         help="Output directory for parquet files",
     )
 
-    # analyze command - run analysis queries
+    # analyze command - run analysis queries (raw tables)
     analyze_parser = subparsers.add_parser(
         "analyze",
-        help="Run analysis queries on extracted data",
-        description="Analyze code review patterns from extracted data.",
+        help="Run all analysis queries (raw table output)",
+        description="Run all analysis queries and print raw DuckDB tables.",
     )
     analyze_parser.add_argument(
         "--query",
@@ -80,6 +80,13 @@ def main():
         type=Path,
         default=Path("data/raw"),
         help="Directory containing parquet files",
+    )
+
+    # report command - narrative report
+    subparsers.add_parser(
+        "report",
+        help="Generate narrative report (recommended)",
+        description="Generate a narrative report answering: Is code review adding value?",
     )
 
     args = parser.parse_args()
@@ -99,6 +106,11 @@ def main():
         from ..analyze import main as analyze_main
 
         analyze_main()
+
+    elif args.command == "report":
+        from ..report import main as report_main
+
+        report_main()
 
     elif args.command is None:
         parser.print_help()
