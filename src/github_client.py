@@ -159,9 +159,6 @@ class GitHubClient:
         self._request_count = 0
         self._rate_limit_remaining: int = 5000  # Conservative default
         self._rate_limit_reset: float = 0
-        # Pacing to avoid secondary rate limits (900 points/min = 15 req/sec)
-        # With 10 workers, ~70ms delay keeps us around 14 req/sec
-        self._request_delay: float = 0.07
 
     async def __aenter__(self):
         self.client = httpx.AsyncClient(
@@ -264,10 +261,6 @@ class GitHubClient:
             request_headers.update(headers)
 
         for attempt in range(max_retries):
-            # Small delay to avoid hitting secondary rate limits (15 req/sec)
-            if self._request_delay > 0:
-                await trio.sleep(self._request_delay)
-
             response = await self.client.request(
                 method, path, params=params, headers=request_headers
             )
