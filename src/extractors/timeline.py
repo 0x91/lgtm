@@ -33,6 +33,12 @@ def extract_timeline_event(pr_number: int, event_data: dict) -> TimelineEvent | 
     actor = event_data.get("actor") or event_data.get("user") or {}
     actor_login = actor.get("login") if isinstance(actor, dict) else None
 
+    # For review_requested events, capture who was asked
+    requested_reviewer: str | None = None
+    if event_type == "review_requested":
+        reviewer = event_data.get("requested_reviewer") or {}
+        requested_reviewer = reviewer.get("login") if isinstance(reviewer, dict) else None
+
     # Timestamp can be in different fields
     created_at = (
         event_data.get("created_at")
@@ -47,5 +53,6 @@ def extract_timeline_event(pr_number: int, event_data: dict) -> TimelineEvent | 
         pr_number=pr_number,
         event_type=event_type,
         actor_login=actor_login,
+        requested_reviewer=requested_reviewer,
         created_at=parse_datetime_required(created_at),
     )

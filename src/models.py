@@ -100,6 +100,8 @@ class TimelineEvent(BaseModel):
     pr_number: int
     event_type: str
     actor_login: str | None
+    # For review_requested events: who was asked to review
+    requested_reviewer: str | None
     created_at: datetime
 
 
