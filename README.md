@@ -28,13 +28,24 @@ Or run from source:
 ```bash
 git clone https://github.com/0x91/lgtm.git
 cd lgtm
-uv sync
+uv sync --all-extras  # Install all optional features
 
 # Run against any repo
 cd /path/to/your-repo
 export GITHUB_TOKEN=ghp_xxx
 uv run lgtm fetch
 uv run lgtm report
+```
+
+### Optional Extras
+
+Install only what you need:
+
+```bash
+uv tool install 'lgtm[sentiment]'  # Sentiment analysis for review comments
+uv tool install 'lgtm[pdf]'        # PDF report export
+uv tool install 'lgtm[ai]'         # AI/MCP server integration
+uv tool install 'lgtm[all]'        # All optional features
 ```
 
 ## Commands
@@ -45,6 +56,25 @@ uv run lgtm report
 | `lgtm report` | Generate narrative report answering "Is review adding value?" |
 | `lgtm analyze` | Run all 35 analysis queries (raw table output) |
 | `lgtm init` | Auto-generate `lgtm.yaml` from package manager workspaces |
+| `lgtm mcp` | Start MCP server for AI assistant integration (requires `lgtm[ai]`) |
+
+### Fetch Options
+
+```bash
+lgtm fetch                    # Incremental fetch (only new PRs since last run)
+lgtm fetch --full             # Full fetch from start_date (ignore checkpoint)
+lgtm fetch --since 2024-06-01 # Override start date
+lgtm fetch --limit 100        # Limit to 100 PRs
+lgtm fetch --refresh-days 7   # Re-fetch PRs from the last 7 days
+```
+
+### Report Options
+
+```bash
+lgtm report                   # Terminal output (default)
+lgtm report --format pdf      # Export as PDF (requires lgtm[pdf])
+lgtm report -f pdf -o report.pdf  # Custom output path
+```
 
 ## Analysis Queries
 
@@ -154,6 +184,10 @@ The tool includes sensible defaults that work for most monorepos:
 Create `lgtm.yaml` in your repo root to customize:
 
 ```yaml
+# Fetch settings
+fetch:
+  start_date: "2024-01-01"  # Only fetch PRs after this date
+
 modules:
   rules:
     # Capture patterns: {name} matches a single path segment
@@ -263,12 +297,6 @@ Required:
 GITHUB_TOKEN=ghp_xxx   # Or use GitHub App (see below)
 ```
 
-Optional:
-
-```bash
-START_DATE=2025-01-01  # Default: Jan 1 of current year
-```
-
 For higher rate limits (15k+/hr vs 5k), use a GitHub App:
 
 ```bash
@@ -276,6 +304,50 @@ GITHUB_APP_ID=123456
 GITHUB_APP_INSTALLATION_ID=12345678
 GITHUB_APP_PRIVATE_KEY_PATH=./your-app.pem
 ```
+
+## AI/MCP Integration
+
+The MCP (Model Context Protocol) server allows AI assistants like Claude to query your code review data directly.
+
+### Setup
+
+```bash
+# Install with AI extras
+uv tool install 'lgtm[ai]'
+
+# Start the MCP server
+lgtm mcp
+```
+
+Or add to your Claude Code settings (`.claude/settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "lgtm": {
+      "command": "lgtm-mcp"
+    }
+  }
+}
+```
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_overview` | Summary stats: total PRs, reviews, top reviewers, date range |
+| `query` | Run DuckDB SQL queries against the analysis database |
+| `get_red_flags` | Find PRs that may have slipped through review |
+| `get_reviewer_stats` | Detailed stats for a specific reviewer |
+| `get_author_stats` | Detailed stats for a specific PR author |
+
+### Example Queries
+
+Ask Claude:
+- "What's the overview of our code review data?"
+- "Who rubber-stamps the most PRs?"
+- "Show me large PRs that were approved quickly with no comments"
+- "What are Charlie's review stats?"
 
 ## License
 
