@@ -51,7 +51,7 @@ from .models import (
 )
 
 # Concurrency settings
-CONCURRENT_PRS = 10  # Process this many PRs concurrently
+CONCURRENT_PRS = 4  # Process this many PRs concurrently
 PR_QUEUE_SIZE = 50  # Buffer size for PR queue
 RATE_LIMIT_PRODUCER_PAUSE = 100  # Producer pauses if rate limit drops below this
 
