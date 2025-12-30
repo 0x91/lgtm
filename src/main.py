@@ -22,7 +22,6 @@ from rich.table import Table
 
 from .config import (
     CHECKPOINT_FILE,
-    CHECKPOINT_INTERVAL,
     DATA_DIR,
     END_DATE,
     LOG_FILE,
@@ -49,6 +48,10 @@ from .models import (
     TimelineEvent,
     User,
 )
+
+# Concurrency settings
+CONCURRENT_PRS = 10  # Process this many PRs concurrently
+PR_QUEUE_SIZE = 50  # Buffer size for PR queue
 
 
 def setup_logging():
@@ -525,8 +528,123 @@ class DataExtractor:
 
         return table
 
+    async def _process_single_pr(
+        self,
+        pr_data: dict,
+        limiter: trio.CapacityLimiter,
+    ) -> None:
+        """Process a single PR with concurrency limiting."""
+        async with limiter:
+            if self._stop_requested:
+                return
+
+            pr_number = pr_data["number"]
+
+            try:
+                details = await self.extract_pr_details(pr_number, pr_data)
+                self.merge_details(details, pr_number)
+                logger.debug(f"PR #{pr_number} extracted successfully")
+            except Exception as e:
+                self.stats.failed_prs += 1
+                error_record = ErrorRecord(
+                    pr_number=pr_number,
+                    error_type=type(e).__name__,
+                    error_message=str(e)[:500],
+                    timestamp=datetime.now(UTC).isoformat(),
+                    retries=self.failed_prs.get(pr_number, ErrorRecord(0, "", "", "")).retries + 1,
+                )
+                self.failed_prs[pr_number] = error_record
+                self.stats.last_error = f"PR #{pr_number}: {type(e).__name__}: {str(e)[:100]}"
+                logger.error(f"PR #{pr_number} failed: {type(e).__name__}: {e}")
+                logger.error(traceback.format_exc())
+
+    async def _pr_producer(
+        self,
+        send_channel: trio.MemorySendChannel,
+        limit: int | None,
+    ) -> None:
+        """Fetch PRs and queue them for processing (runs concurrently with workers)."""
+        async with send_channel:
+            queued = 0
+
+            # Stream PRs from API and queue for processing immediately
+            async for pr in self.client.get_pull_requests(state="all", since=START_DATE):
+                if self._stop_requested:
+                    break
+
+                pr_created = datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00"))
+                if pr_created < START_DATE:
+                    continue
+
+                self.stats.total_prs += 1
+
+                if pr["number"] in self.processed_prs:
+                    self.stats.skipped_prs += 1
+                    continue
+
+                await send_channel.send(pr)
+                queued += 1
+
+                if limit and queued >= limit:
+                    break
+
+            # Also queue failed PRs for retry
+            for pr_num in list(self.failed_prs.keys()):
+                if self._stop_requested:
+                    break
+                if pr_num not in self.processed_prs:
+                    try:
+                        pr_data = await self.client.get(
+                            f"/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_num}"
+                        )
+                        await send_channel.send(pr_data)
+                    except Exception as e:
+                        logger.warning(f"Could not fetch failed PR #{pr_num}: {e}")
+
+    async def _pr_worker(
+        self,
+        receive_channel: trio.MemoryReceiveChannel,
+        limiter: trio.CapacityLimiter,
+    ) -> None:
+        """Worker that processes PRs from the queue concurrently."""
+        async with receive_channel:
+            async for pr_data in receive_channel:
+                if self._stop_requested:
+                    break
+                await self._process_single_pr(pr_data, limiter)
+
+    async def _checkpoint_task(self, interval: float = 30.0) -> None:
+        """Periodically save checkpoints and update rate limit."""
+        last_processed = 0
+        while not self._stop_requested:
+            await trio.sleep(interval)
+
+            # Only checkpoint if we've made progress
+            current_processed = self.stats.processed_prs
+            if current_processed > last_processed:
+                self.save_parquet_incremental()
+                self.save_checkpoint()
+                last_processed = current_processed
+
+            # Update rate limit info
+            try:
+                rate_info = (await self.client.get_rate_limit())["rate"]
+                self.stats.rate_limit_remaining = rate_info["remaining"]
+            except Exception:
+                pass
+
+    async def _dashboard_task(self, live: Live) -> None:
+        """Update dashboard periodically."""
+        while not self._stop_requested:
+            await trio.sleep(0.5)
+            live.update(self.build_dashboard())
+
     async def run(self, limit: int | None = None, refresh_days: int | None = None):
-        """Run the full extraction with live TUI.
+        """Run extraction with concurrent PR processing.
+
+        Uses producer/consumer pattern:
+        - Producer: Fetches PR pages and queues them (no waiting for all pages)
+        - Workers: Process PRs concurrently (CONCURRENT_PRS at a time)
 
         Args:
             limit: Max number of PRs to process
@@ -538,12 +656,14 @@ class DataExtractor:
         logger.info(f"Auth type: {self.stats.auth_type}, Limit: {limit}, Refresh days: {refresh_days}")
 
         self.console.print(f"[bold]Extracting PRs from {START_DATE.date()} to {END_DATE.date()}[/]")
-        self.console.print(f"[dim]Auth: {self.stats.auth_type.upper()}[/]")
+        self.console.print(f"[dim]Auth: {self.stats.auth_type.upper()} | Concurrency: {CONCURRENT_PRS} PRs[/]")
 
         # Load checkpoint
         if self.load_checkpoint(refresh_days=refresh_days):
             logger.info(f"Resumed from checkpoint: {len(self.processed_prs)} PRs already processed")
-            self.console.print(f"[green]Resumed from checkpoint: {len(self.processed_prs)} PRs already processed[/]")
+            self.console.print(
+                f"[green]Resumed from checkpoint: {len(self.processed_prs)} PRs already processed[/]"
+            )
 
         # Update rate limit info
         try:
@@ -552,87 +672,39 @@ class DataExtractor:
         except Exception:
             pass
 
-        # Get all PRs in date range
-        self.console.print("\n[bold]Fetching PR list...[/]")
-        pr_list: list[dict] = []
+        self.console.print("\n[dim]Press Ctrl+C to stop (progress is saved)[/]\n")
 
-        async for pr in self.client.get_pull_requests(state="all", since=START_DATE):
-            pr_created = datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00"))
-            if pr_created >= START_DATE:
-                pr_list.append(pr)
-            if limit and len(pr_list) >= limit:
-                break
-
-        # Always retry failed PRs automatically
-        failed_to_retry = [n for n in self.failed_prs if n not in self.processed_prs]
-        for pr_num in failed_to_retry:
-            if pr_num not in [p["number"] for p in pr_list]:
-                try:
-                    pr_data = await self.client.get(f"/repos/{REPO_OWNER}/{REPO_NAME}/pulls/{pr_num}")
-                    pr_list.append(pr_data)
-                except Exception as e:
-                    logger.warning(f"Could not fetch failed PR #{pr_num}: {e}")
-
-        # Filter out already processed
-        prs_to_process = [p for p in pr_list if p["number"] not in self.processed_prs]
-        self.stats.total_prs = len(pr_list)
-
-        self.console.print(f"[green]Found {len(prs_to_process)} PRs to process ({self.stats.skipped_prs} already done)[/]\n")
-
-        if not prs_to_process:
-            self.console.print("[yellow]No new PRs to process.[/]")
-            return
-
-        self.console.print("[dim]Press Ctrl+C to stop (progress is saved)[/]\n")
-
-        # Setup signal handler (works with trio)
+        # Setup signal handler
         signal.signal(signal.SIGINT, self._handle_interrupt)
         signal.signal(signal.SIGTERM, self._handle_interrupt)
 
-        # Process with live dashboard
+        # Create producer/consumer pipeline
+        send_channel, receive_channel = trio.open_memory_channel[dict](PR_QUEUE_SIZE)
+        limiter = trio.CapacityLimiter(CONCURRENT_PRS)
+
         with Live(self.build_dashboard(), console=self.console, refresh_per_second=2) as live:
-            for i, pr_data in enumerate(prs_to_process):
-                pr_number = pr_data["number"]
+            try:
+                async with trio.open_nursery() as nursery:
+                    # Start producer (fetches PR pages, queues PRs immediately)
+                    nursery.start_soon(self._pr_producer, send_channel, limit)
 
-                # Check for stop
-                if self._stop_requested:
-                    break
+                    # Start workers (process PRs concurrently)
+                    for _ in range(CONCURRENT_PRS):
+                        nursery.start_soon(self._pr_worker, receive_channel.clone(), limiter)
 
-                # Extract PR with concurrent API calls
-                try:
-                    details = await self.extract_pr_details(pr_number, pr_data)
-                    self.merge_details(details, pr_number)
-                    logger.debug(f"PR #{pr_number} extracted successfully")
-                except Exception as e:
-                    self.stats.failed_prs += 1
-                    error_record = ErrorRecord(
-                        pr_number=pr_number,
-                        error_type=type(e).__name__,
-                        error_message=str(e)[:500],
-                        timestamp=datetime.now(UTC).isoformat(),
-                        retries=self.failed_prs.get(pr_number, ErrorRecord(0, "", "", "")).retries + 1,
-                    )
-                    self.failed_prs[pr_number] = error_record
-                    self.stats.last_error = f"PR #{pr_number}: {type(e).__name__}: {str(e)[:100]}"
-                    logger.error(f"PR #{pr_number} failed: {type(e).__name__}: {e}")
-                    logger.error(traceback.format_exc())
+                    # Start checkpoint task (saves every 30s)
+                    nursery.start_soon(self._checkpoint_task)
 
-                # Update rate limit periodically
-                if (i + 1) % 50 == 0:
-                    try:
-                        rate_info = (await self.client.get_rate_limit())["rate"]
-                        self.stats.rate_limit_remaining = rate_info["remaining"]
-                    except Exception:
-                        pass
+                    # Start dashboard updater
+                    nursery.start_soon(self._dashboard_task, live)
 
-                # Incremental save and checkpoint (parquet first, then checkpoint)
-                if (i + 1) % CHECKPOINT_INTERVAL == 0:
-                    self.save_parquet_incremental()
-                    self.save_checkpoint()
+                    # Close our copy of receive channel (workers have clones)
+                    await receive_channel.aclose()
 
-                live.update(self.build_dashboard())
+            except trio.Cancelled:
+                pass  # Normal shutdown
 
-        # Final save (parquet first, then checkpoint)
+        # Final save
         was_interrupted = self._stop_requested
         self.stats.state = ExtractionState.PAUSED if was_interrupted else ExtractionState.COMPLETED
         self.save_parquet_incremental()
@@ -640,7 +712,10 @@ class DataExtractor:
         self.save_error_log()
 
         status = "interrupted" if was_interrupted else "complete"
-        logger.info(f"Extraction {status}: {self.stats.processed_prs} processed, {self.stats.failed_prs} failed, {self.stats.api_requests} API requests")
+        logger.info(
+            f"Extraction {status}: {self.stats.processed_prs} processed, "
+            f"{self.stats.failed_prs} failed, {self.stats.api_requests} API requests"
+        )
 
         if was_interrupted:
             self.console.print("\n[bold yellow]Extraction stopped - progress saved[/]")
