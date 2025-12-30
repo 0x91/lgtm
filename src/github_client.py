@@ -157,6 +157,8 @@ class GitHubClient:
         self._auth_type = "app" if self.app_auth else "pat"
         self.client: httpx.AsyncClient | None = None
         self._request_count = 0
+        self._rate_limit_remaining: int = 5000  # Conservative default
+        self._rate_limit_reset: float = 0
 
     async def __aenter__(self):
         self.client = httpx.AsyncClient(
@@ -188,6 +190,25 @@ class GitHubClient:
     @property
     def request_count(self) -> int:
         return self._request_count
+
+    @property
+    def rate_limit_remaining(self) -> int:
+        """Current rate limit remaining (updated on each response)."""
+        return self._rate_limit_remaining
+
+    @property
+    def rate_limit_reset(self) -> float:
+        """Unix timestamp when rate limit resets."""
+        return self._rate_limit_reset
+
+    def _update_rate_limit(self, response: httpx.Response) -> None:
+        """Update rate limit tracking from response headers."""
+        remaining = response.headers.get("X-RateLimit-Remaining")
+        reset = response.headers.get("X-RateLimit-Reset")
+        if remaining is not None:
+            self._rate_limit_remaining = int(remaining)
+        if reset is not None:
+            self._rate_limit_reset = float(reset)
 
     async def _handle_rate_limit(self, response: httpx.Response) -> bool:
         """Handle rate limiting. Returns True if request should be retried."""
@@ -229,6 +250,7 @@ class GitHubClient:
                 method, path, params=params, headers=request_headers
             )
             self._request_count += 1
+            self._update_rate_limit(response)
 
             if await self._handle_rate_limit(response):
                 continue

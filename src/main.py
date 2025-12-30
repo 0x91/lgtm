@@ -8,6 +8,7 @@ import logging
 import os
 import signal
 import sys
+import time
 import traceback
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -52,6 +53,7 @@ from .models import (
 # Concurrency settings
 CONCURRENT_PRS = 10  # Process this many PRs concurrently
 PR_QUEUE_SIZE = 50  # Buffer size for PR queue
+RATE_LIMIT_PRODUCER_PAUSE = 100  # Producer pauses if rate limit drops below this
 
 
 def setup_logging():
@@ -377,14 +379,14 @@ class DataExtractor:
             if user_id not in self.users:
                 self.users[user_id] = user
 
-        # Update stats
-        self.stats.reviews_count = len(self.reviews)
-        self.stats.pr_comments_count = len(self.pr_comments)
-        self.stats.review_comments_count = len(self.review_comments)
-        self.stats.files_count = len(self.files)
-        self.stats.checks_count = len(self.checks)
-        self.stats.timeline_events_count = len(self.timeline_events)
-        self.stats.users_count = len(self.users)
+        # Update stats (increment by new counts, not list length - lists get cleared on flush)
+        self.stats.reviews_count += len(details.reviews)
+        self.stats.pr_comments_count += len(details.pr_comments)
+        self.stats.review_comments_count += len(details.review_comments)
+        self.stats.files_count += len(details.files)
+        self.stats.checks_count += len(details.checks)
+        self.stats.timeline_events_count += len(details.timeline_events)
+        self.stats.users_count = len(self.users)  # users dict isn't cleared, so this is still correct
 
         # Add to pending
         self.pending_prs.append(pr_number)
@@ -566,12 +568,32 @@ class DataExtractor:
             logger.error(f"PR #{pr_number} failed: {type(e).__name__}: {e}")
             logger.error(traceback.format_exc())
 
+    async def _wait_for_rate_limit(self) -> None:
+        """Wait for rate limit to recover if it's critically low.
+
+        Called by producer to prioritize in-flight worker requests over fetching new PRs.
+        Workers continue processing while producer waits.
+        """
+        while self.client.rate_limit_remaining < RATE_LIMIT_PRODUCER_PAUSE:
+            if self._stop_requested:
+                return
+            reset_time = self.client.rate_limit_reset
+            wait_seconds = max(reset_time - time.time(), 10)
+            logger.info(
+                f"Rate limit low ({self.client.rate_limit_remaining}), "
+                f"producer pausing {wait_seconds:.0f}s to let workers finish"
+            )
+            await trio.sleep(min(wait_seconds, 30))  # Check every 30s max
+
     async def _pr_producer(
         self,
         send_channel: trio.MemorySendChannel,
         limit: int | None,
     ) -> None:
-        """Fetch PRs and queue them for processing (runs concurrently with workers)."""
+        """Fetch PRs and queue them for processing.
+
+        Prioritizes workers over fetching new pages when rate limit is low.
+        """
         async with send_channel:
             queued = 0
 
@@ -579,6 +601,9 @@ class DataExtractor:
             async for pr in self.client.get_pull_requests(state="all", since=START_DATE):
                 if self._stop_requested:
                     break
+
+                # Pause if rate limit is low - let workers drain the queue first
+                await self._wait_for_rate_limit()
 
                 pr_created = datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00"))
                 if pr_created < START_DATE:

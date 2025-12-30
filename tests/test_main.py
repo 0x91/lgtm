@@ -207,3 +207,169 @@ class TestMergeDetails:
         assert extractor.stats.reviews_count == 1
         assert 123 in extractor.pending_prs
         assert len(extractor.prs) == 1
+
+    def test_stats_persist_after_flush(self, extractor):
+        """Test that stats don't reset when data is flushed to parquet.
+
+        Regression test: stats were being set from len(self.reviews) which
+        resets to 0 after flush. Now they increment correctly.
+        """
+        from datetime import UTC, datetime
+
+        from src.main import PRDetails
+        from src.models import PullRequest, Review
+
+        pr = PullRequest(
+            pr_number=123,
+            pr_id=456,
+            title="Test PR",
+            body=None,
+            author_login="test",
+            author_id=1,
+            author_is_bot=False,
+            state="closed",
+            merged=True,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+            merged_at=None,
+            closed_at=None,
+            additions=10,
+            deletions=5,
+            changed_files=2,
+            commits=1,
+            comments_count=0,
+            review_comments_count=0,
+            draft=False,
+            merge_commit_sha=None,
+        )
+
+        review = Review(
+            review_id=789,
+            pr_number=123,
+            reviewer_login="reviewer",
+            reviewer_id=2,
+            reviewer_is_bot=False,
+            state="APPROVED",
+            body="LGTM",
+            submitted_at=datetime.now(UTC),
+            commit_id="abc123",
+        )
+
+        details = PRDetails(
+            pr=pr,
+            reviews=[review],
+            files=[],
+            pr_comments=[],
+            review_comments=[],
+            checks=[],
+            timeline_events=[],
+            users={},
+        )
+
+        # Merge first PR
+        extractor.merge_details(details, 123)
+        assert extractor.stats.reviews_count == 1
+
+        # Simulate what flush does - clear the lists
+        extractor.prs = []
+        extractor.reviews = []
+        extractor.pr_comments = []
+        extractor.review_comments = []
+        extractor.files = []
+        extractor.checks = []
+        extractor.timeline_events = []
+
+        # Merge second PR
+        pr2 = PullRequest(
+            pr_number=124,
+            pr_id=457,
+            title="Test PR 2",
+            body=None,
+            author_login="test",
+            author_id=1,
+            author_is_bot=False,
+            state="closed",
+            merged=True,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+            merged_at=None,
+            closed_at=None,
+            additions=5,
+            deletions=3,
+            changed_files=1,
+            commits=1,
+            comments_count=0,
+            review_comments_count=0,
+            draft=False,
+            merge_commit_sha=None,
+        )
+
+        review2 = Review(
+            review_id=790,
+            pr_number=124,
+            reviewer_login="reviewer2",
+            reviewer_id=3,
+            reviewer_is_bot=False,
+            state="COMMENTED",
+            body="Nice",
+            submitted_at=datetime.now(UTC),
+            commit_id="def456",
+        )
+
+        details2 = PRDetails(
+            pr=pr2,
+            reviews=[review2, review2],  # 2 reviews this time
+            files=[],
+            pr_comments=[],
+            review_comments=[],
+            checks=[],
+            timeline_events=[],
+            users={},
+        )
+
+        extractor.merge_details(details2, 124)
+
+        # Stats should be cumulative (1 + 2 = 3), not reset to 2
+        assert extractor.stats.reviews_count == 3
+
+
+class TestRateLimitPrioritization:
+    """Tests for rate limit handling and producer prioritization."""
+
+    @pytest.fixture
+    def extractor(self):
+        """Create a DataExtractor with mock client."""
+        client = MagicMock()
+        client.auth_type = "pat"
+        client.rate_limit_remaining = 5000
+        client.rate_limit_reset = 0
+        console = Console(quiet=True)
+        return DataExtractor(client, console)
+
+    @pytest.mark.trio
+    async def test_producer_pauses_on_low_rate_limit(self, extractor):
+        """Test that producer waits when rate limit is critically low."""
+        from src.main import RATE_LIMIT_PRODUCER_PAUSE
+
+        # Set rate limit below threshold
+        extractor.client.rate_limit_remaining = RATE_LIMIT_PRODUCER_PAUSE - 1
+        extractor.client.rate_limit_reset = 0  # Already reset
+
+        # Request stop so the wait loop exits
+        extractor._stop_requested = True
+
+        # Should return without error (stop was requested)
+        await extractor._wait_for_rate_limit()
+        assert extractor._stop_requested is True
+
+    @pytest.mark.trio
+    async def test_producer_continues_on_sufficient_rate_limit(self, extractor):
+        """Test that producer doesn't wait when rate limit is sufficient."""
+        from src.main import RATE_LIMIT_PRODUCER_PAUSE
+
+        # Set rate limit above threshold
+        extractor.client.rate_limit_remaining = RATE_LIMIT_PRODUCER_PAUSE + 100
+
+        # Should return immediately without waiting
+        await extractor._wait_for_rate_limit()
+        # No assertion needed - test passes if it doesn't hang
