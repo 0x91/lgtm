@@ -57,6 +57,19 @@ def main():
         default=None,
         help="Re-fetch PRs from the last N days (updates existing data)",
     )
+    fetch_parser.add_argument(
+        "--since",
+        "-s",
+        type=str,
+        default=None,
+        help="Fetch PRs created after this date (ISO format: YYYY-MM-DD). Overrides lgtm.yaml config.",
+    )
+    fetch_parser.add_argument(
+        "--full",
+        "-f",
+        action="store_true",
+        help="Full fetch from start_date (ignore incremental mode)",
+    )
 
     # analyze command - run analysis queries (raw tables)
     analyze_parser = subparsers.add_parser(
@@ -91,7 +104,7 @@ def main():
 
         from ..main import main as fetch_main
 
-        trio.run(fetch_main, args.limit, args.refresh_days)
+        trio.run(fetch_main, args.limit, args.refresh_days, args.since, args.full)
 
     elif args.command == "analyze":
         from ..analyze import main as analyze_main

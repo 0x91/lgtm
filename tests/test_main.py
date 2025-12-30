@@ -1,6 +1,7 @@
 """Tests for main extraction orchestrator."""
 
 import signal
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -8,6 +9,9 @@ import trio
 from rich.console import Console
 
 from src.main import CONCURRENT_PRS, PR_QUEUE_SIZE, DataExtractor, ExtractionState
+
+# Default start date for tests
+DEFAULT_TEST_START_DATE = datetime(2025, 1, 1, tzinfo=UTC)
 
 
 class TestDataExtractor:
@@ -25,7 +29,7 @@ class TestDataExtractor:
     def extractor(self, mock_client):
         """Create a DataExtractor with mock client."""
         console = Console(quiet=True)
-        return DataExtractor(mock_client, console)
+        return DataExtractor(mock_client, console, DEFAULT_TEST_START_DATE)
 
     def test_init_state(self, extractor):
         """Test initial state of extractor."""
@@ -146,7 +150,7 @@ class TestMergeDetails:
         client = MagicMock()
         client.auth_type = "pat"
         console = Console(quiet=True)
-        return DataExtractor(client, console)
+        return DataExtractor(client, console, DEFAULT_TEST_START_DATE)
 
     def test_merge_updates_stats(self, extractor):
         """Test that merging details updates stats correctly."""
@@ -345,7 +349,7 @@ class TestRateLimitPrioritization:
         client.rate_limit_remaining = 5000
         client.rate_limit_reset = 0
         console = Console(quiet=True)
-        return DataExtractor(client, console)
+        return DataExtractor(client, console, DEFAULT_TEST_START_DATE)
 
     @pytest.mark.trio
     async def test_producer_pauses_on_low_rate_limit(self, extractor):

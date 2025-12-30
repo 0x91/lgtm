@@ -1,4 +1,8 @@
-"""Configuration for GitHub data extraction."""
+"""Configuration for GitHub data extraction.
+
+Only secrets (auth tokens) are configured via environment variables.
+All other config goes in lgtm.yaml.
+"""
 
 import os
 from datetime import UTC, datetime
@@ -15,11 +19,8 @@ GITHUB_APP_ID = os.environ.get("GITHUB_APP_ID")
 GITHUB_APP_PRIVATE_KEY_PATH = os.environ.get("GITHUB_APP_PRIVATE_KEY_PATH")
 GITHUB_APP_INSTALLATION_ID = os.environ.get("GITHUB_APP_INSTALLATION_ID")
 
-# Date range (START_DATE as ISO string, e.g., "2025-01-01")
-_start = os.environ.get("START_DATE", "2025-01-01")
-START_DATE = datetime.fromisoformat(_start).replace(tzinfo=UTC)
+# End date is always "now" - start date comes from lgtm.yaml or CLI
 END_DATE = datetime.now(UTC)
 
 # Extraction settings
-CHECKPOINT_INTERVAL = 100  # Save checkpoint every N PRs
 PER_PAGE = 100  # Max items per API page

@@ -20,7 +20,7 @@ from rich.console import Console
 from rich.live import Live
 from rich.table import Table
 
-from .config import END_DATE, START_DATE
+from .config import END_DATE
 from .extractors.checks import extract_check_run
 from .extractors.comments import extract_pr_comment, extract_review_comment
 from .extractors.files import extract_file_change
@@ -130,10 +130,11 @@ class PRDetails:
 class DataExtractor:
     """Main data extraction orchestrator with TUI."""
 
-    def __init__(self, client: GitHubClient, console: Console):
+    def __init__(self, client: GitHubClient, console: Console, start_date: datetime):
         self.client = client
         self.console = console
         self.repo = get_repo()
+        self.start_date = start_date
 
         # Data storage
         self.prs: list[PullRequest] = []
@@ -150,6 +151,7 @@ class DataExtractor:
         self.pending_prs: list[int] = []  # PRs extracted but not yet saved
         self.failed_prs: dict[int, ErrorRecord] = {}
         self.stats = ExtractionStats()
+        self.latest_pr_date: datetime | None = None  # Track latest PR for incremental fetch
 
         # Control flag
         self._stop_requested = False
@@ -170,6 +172,9 @@ class DataExtractor:
         Args:
             refresh_days: If set, PRs created within the last N days will be
                          removed from processed_prs so they get re-extracted.
+
+        Returns:
+            True if checkpoint was loaded successfully.
         """
         checkpoint_file = self.repo.checkpoint_file
         if not checkpoint_file.exists():
@@ -180,6 +185,11 @@ class DataExtractor:
                 checkpoint = json.load(f)
 
             self.processed_prs = set(checkpoint.get("processed_prs", []))
+
+            # Load latest PR date for incremental fetch
+            latest_date_str = checkpoint.get("latest_pr_date")
+            if latest_date_str:
+                self.latest_pr_date = datetime.fromisoformat(latest_date_str)
 
             # Load failed PRs
             for error_data in checkpoint.get("failed_prs", []):
@@ -234,6 +244,7 @@ class DataExtractor:
                 for e in self.failed_prs.values()
             ],
             "timestamp": datetime.now(UTC).isoformat(),
+            "latest_pr_date": self.latest_pr_date.isoformat() if self.latest_pr_date else None,
             "stats": {
                 "total_processed": len(self.processed_prs),
                 "total_failed": len(self.failed_prs),
@@ -620,12 +631,13 @@ class DataExtractor:
         """Fetch PRs and queue them for processing.
 
         Prioritizes workers over fetching new pages when rate limit is low.
+        Also tracks the latest PR date for incremental fetch.
         """
         async with send_channel:
             queued = 0
 
             # Stream PRs from API and queue for processing immediately
-            async for pr in self.client.get_pull_requests(state="all", since=START_DATE):
+            async for pr in self.client.get_pull_requests(state="all", since=self.start_date):
                 if self._stop_requested:
                     break
 
@@ -633,8 +645,12 @@ class DataExtractor:
                 await self._wait_for_rate_limit()
 
                 pr_created = datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00"))
-                if pr_created < START_DATE:
+                if pr_created < self.start_date:
                     continue
+
+                # Track latest PR date for incremental fetch
+                if self.latest_pr_date is None or pr_created > self.latest_pr_date:
+                    self.latest_pr_date = pr_created
 
                 self.stats.total_prs += 1
 
@@ -712,12 +728,12 @@ class DataExtractor:
         """
         self.stats.auth_type = self.client.auth_type
         logger.info("=" * 60)
-        logger.info(f"Starting extraction: {START_DATE.date()} to {END_DATE.date()}")
+        logger.info(f"Starting extraction: {self.start_date.date()} to {END_DATE.date()}")
         logger.info(
             f"Auth type: {self.stats.auth_type}, Limit: {limit}, Refresh days: {refresh_days}"
         )
 
-        self.console.print(f"[bold]Extracting PRs from {START_DATE.date()} to {END_DATE.date()}[/]")
+        self.console.print(f"[bold]Extracting PRs from {self.start_date.date()} to {END_DATE.date()}[/]")
         self.console.print(
             f"[dim]Auth: {self.stats.auth_type.upper()} | Concurrency: {CONCURRENT_PRS} PRs[/]"
         )
@@ -800,8 +816,43 @@ class DataExtractor:
             self.console.print("[dim]Failed PRs will be retried automatically on next run[/]")
 
 
-async def main(limit: int | None = None, refresh_days: int | None = None):
-    """Main entry point."""
+DEFAULT_START_DATE = "2025-01-01"
+
+
+def get_last_fetch_date(repo) -> datetime | None:
+    """Get the latest PR date from the last fetch (for incremental mode).
+
+    Returns None if no checkpoint exists or no date was recorded.
+    """
+    checkpoint_file = repo.checkpoint_file
+    if not checkpoint_file.exists():
+        return None
+
+    try:
+        with open(checkpoint_file) as f:
+            checkpoint = json.load(f)
+        latest_date_str = checkpoint.get("latest_pr_date")
+        if latest_date_str:
+            return datetime.fromisoformat(latest_date_str)
+    except Exception:
+        pass
+    return None
+
+
+async def main(
+    limit: int | None = None,
+    refresh_days: int | None = None,
+    since: str | None = None,
+    full: bool = False,
+):
+    """Main entry point.
+
+    Args:
+        limit: Max number of PRs to fetch
+        refresh_days: Re-fetch PRs from the last N days
+        since: Start date (ISO format). Priority: CLI arg > lgtm.yaml > default (2025-01-01)
+        full: If True, ignore incremental mode and fetch from start_date
+    """
     console = Console()
 
     # Setup logging (configures file handler for repo)
@@ -812,12 +863,48 @@ async def main(limit: int | None = None, refresh_days: int | None = None):
     set_extractor_config(config)
 
     repo = get_repo()
+
+    # Resolve start date with incremental mode support
+    # Priority: --since CLI arg > incremental (last fetch date) > config > default
+    if since:
+        # Explicit --since always wins
+        start_date_str = since
+        mode = "explicit"
+    elif not full:
+        # Try incremental mode - use last fetch date if available
+        last_fetch = get_last_fetch_date(repo)
+        if last_fetch:
+            # Subtract 1 day as safety margin for timezone issues
+            start_date = last_fetch - timedelta(days=1)
+            mode = "incremental"
+        else:
+            start_date_str = config.start_date or DEFAULT_START_DATE
+            mode = "initial"
+    else:
+        # Full mode - use config start date
+        start_date_str = config.start_date or DEFAULT_START_DATE
+        mode = "full"
+
+    # Parse date string if we have one
+    if mode not in ("incremental",):
+        try:
+            start_date = datetime.fromisoformat(start_date_str).replace(tzinfo=UTC)
+        except ValueError as e:
+            console.print(f"[red]Invalid date format: {start_date_str}[/]")
+            console.print("[dim]Use ISO format: YYYY-MM-DD (e.g., 2025-01-01)[/]")
+            raise SystemExit(1) from e
+
     logger.info(f"Fetching data for {repo.full_name}")
     console.print(f"[bold]Repository: {repo.full_name}[/]")
     console.print(f"[dim]Data dir: {repo.raw_data_dir}[/]")
 
+    if mode == "incremental":
+        console.print(f"[cyan]Incremental mode: fetching PRs since {start_date.date()}[/]")
+    elif mode == "full":
+        console.print(f"[yellow]Full mode: fetching all PRs since {start_date.date()}[/]")
+
     async with GitHubClient() as client:
-        extractor = DataExtractor(client, console)
+        extractor = DataExtractor(client, console, start_date)
         await extractor.run(limit=limit, refresh_days=refresh_days)
 
 

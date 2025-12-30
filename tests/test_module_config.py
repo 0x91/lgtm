@@ -357,3 +357,44 @@ class TestRepoConfigLoading:
         config = ModuleConfig.default()
         assert config.repo_owner is None
         assert config.repo_name is None
+
+
+class TestFetchConfigLoading:
+    """Tests for loading fetch config from YAML."""
+
+    def test_from_dict_with_start_date(self):
+        """Load config with fetch section."""
+        data = {
+            "fetch": {
+                "start_date": "2024-06-01",
+            }
+        }
+        config = ModuleConfig.from_dict(data)
+        assert config.start_date == "2024-06-01"
+
+    def test_from_dict_without_fetch(self):
+        """Config without fetch section has None start_date."""
+        data = {"modules": {"default_depth": 2}}
+        config = ModuleConfig.from_dict(data)
+        assert config.start_date is None
+
+    def test_default_has_no_start_date(self):
+        """Default config has no start_date set."""
+        config = ModuleConfig.default()
+        assert config.start_date is None
+
+    def test_to_yaml_with_start_date(self):
+        """Serialize config with start_date."""
+        config = ModuleConfig(
+            rules=[],
+            start_date="2024-01-15",
+        )
+        yaml_str = config.to_yaml()
+        assert "fetch:" in yaml_str
+        assert "start_date: '2024-01-15'" in yaml_str or "start_date: 2024-01-15" in yaml_str
+
+    def test_to_yaml_without_start_date(self):
+        """Default config doesn't include fetch section in YAML."""
+        config = ModuleConfig.default()
+        yaml_str = config.to_yaml()
+        assert "fetch:" not in yaml_str

@@ -203,6 +203,9 @@ class ModuleConfig:
     repo_owner: str | None = None
     repo_name: str | None = None
 
+    # Fetch configuration
+    start_date: str | None = None  # ISO date string (e.g., "2025-01-01")
+
     @classmethod
     def load(cls, path: Path | str | None = None) -> ModuleConfig:
         """Load config from YAML file or return defaults."""
@@ -227,6 +230,7 @@ class ModuleConfig:
         modules_data = data.get("modules", {})
         bots_data = data.get("bots", {})
         repo_data = data.get("repo", {})
+        fetch_data = data.get("fetch", {})
 
         rules = []
         for rule_data in modules_data.get("rules", []):
@@ -268,6 +272,7 @@ class ModuleConfig:
             include_default_bots=include_default_bots,
             repo_owner=repo_data.get("owner"),
             repo_name=repo_data.get("name"),
+            start_date=fetch_data.get("start_date"),
         )
 
     @classmethod
@@ -433,5 +438,9 @@ class ModuleConfig:
                 data["bots"]["patterns"] = self.bot_patterns
             if self.bot_logins:
                 data["bots"]["logins"] = self.bot_logins
+
+        # Include fetch config if start_date is set
+        if self.start_date:
+            data["fetch"] = {"start_date": self.start_date}
 
         return yaml.dump(data, default_flow_style=False, sort_keys=False)
