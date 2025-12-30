@@ -2,18 +2,47 @@
 
 from datetime import datetime
 
-from ..config import KNOWN_BOTS
 from ..models import PullRequest
+from ..module_config import ModuleConfig
+
+
+# Module-level config instance for bot detection
+# This gets set when the extractor is initialized
+_config: ModuleConfig | None = None
+
+
+def set_config(config: ModuleConfig) -> None:
+    """Set the module config for bot detection."""
+    global _config
+    _config = config
+
+
+def get_config() -> ModuleConfig:
+    """Get the module config, using defaults if not set."""
+    global _config
+    if _config is None:
+        _config = ModuleConfig.default()
+    return _config
 
 
 def is_bot(user: dict) -> bool:
-    """Check if user is a bot/GitHub App."""
-    return user.get("type") == "Bot" or user.get("login", "").endswith("[bot]")
+    """Check if user is a bot/GitHub App.
+
+    Uses the module config's is_bot method which supports:
+    - GitHub API user type ("Bot")
+    - Glob patterns (default: *[bot])
+    - Explicit login list from config
+    """
+    config = get_config()
+    login = user.get("login", "")
+    user_type = user.get("type")
+    return config.is_bot(login, user_type)
 
 
 def get_bot_name(login: str) -> str | None:
     """Extract bot name from login."""
-    return KNOWN_BOTS.get(login)
+    config = get_config()
+    return config.get_bot_name(login)
 
 
 def parse_datetime(dt_str: str | None) -> datetime | None:

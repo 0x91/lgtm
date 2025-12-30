@@ -34,11 +34,12 @@ from .config import (
 from .extractors.checks import extract_check_run
 from .extractors.comments import extract_pr_comment, extract_review_comment
 from .extractors.files import extract_file_change
-from .extractors.prs import extract_pr
+from .extractors.prs import extract_pr, set_config as set_extractor_config
 from .extractors.reviews import extract_review
 from .extractors.timeline import extract_timeline_event
 from .extractors.users import extract_user
 from .github_client import GitHubClient
+from .module_config import ModuleConfig
 from .models import (
     CheckRun,
     FileChange,
@@ -769,6 +770,10 @@ class DataExtractor:
 async def main(limit: int | None = None, refresh_days: int | None = None):
     """Main entry point."""
     console = Console()
+
+    # Load module config and set it for extractors (for bot detection)
+    config = ModuleConfig.load()
+    set_extractor_config(config)
 
     async with GitHubClient() as client:
         extractor = DataExtractor(client, console)

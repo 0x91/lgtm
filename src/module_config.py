@@ -12,6 +12,7 @@ from __future__ import annotations
 import fnmatch
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -143,6 +144,26 @@ DEFAULT_GENERATED_PATTERNS = [
 ]
 
 
+# Default bot patterns to match common GitHub bot accounts
+DEFAULT_BOT_PATTERNS = [
+    "*[bot]",  # Standard GitHub bot suffix (e.g., renovate[bot], dependabot[bot])
+]
+
+
+# Known bots with their friendly names (login -> display name)
+DEFAULT_BOT_LOGINS: dict[str, str] = {
+    "cursor[bot]": "cursor",
+    "github-actions[bot]": "github-actions",
+    "renovate[bot]": "renovate",
+    "dependabot[bot]": "dependabot",
+    "datadog-*[bot]": "datadog",  # Note: This is a pattern hint, actual matching uses patterns
+    "incident-io[bot]": "incident-io",
+    "aikido-security[bot]": "aikido-security",
+    "aikido-autofix[bot]": "aikido-autofix",
+    "linear[bot]": "linear",
+}
+
+
 @dataclass
 class ModuleConfig:
     """Configuration for module extraction."""
@@ -152,6 +173,11 @@ class ModuleConfig:
     root_patterns: list[str] = field(default_factory=lambda: DEFAULT_ROOT_PATTERNS.copy())
     generated_patterns: list[str] = field(default_factory=lambda: DEFAULT_GENERATED_PATTERNS.copy())
     include_default_generated: bool = True  # Set False to only use custom patterns
+
+    # Bot detection configuration
+    bot_patterns: list[str] = field(default_factory=lambda: DEFAULT_BOT_PATTERNS.copy())
+    bot_logins: list[str] = field(default_factory=list)
+    include_default_bots: bool = True  # Set False to only use custom bot config
 
     @classmethod
     def load(cls, path: Path | str | None = None) -> ModuleConfig:
@@ -175,6 +201,7 @@ class ModuleConfig:
     def from_dict(cls, data: dict[str, Any]) -> ModuleConfig:
         """Create config from dictionary (e.g., parsed YAML)."""
         modules_data = data.get("modules", {})
+        bots_data = data.get("bots", {})
 
         rules = []
         for rule_data in modules_data.get("rules", []):
@@ -194,12 +221,26 @@ class ModuleConfig:
         else:
             generated_patterns = custom_generated
 
+        # Bot configuration
+        include_default_bots = bots_data.get("include_defaults", True)
+        custom_bot_patterns = bots_data.get("patterns", [])
+        custom_bot_logins = bots_data.get("logins", [])
+
+        # Merge bot patterns with defaults if enabled
+        if include_default_bots:
+            bot_patterns = DEFAULT_BOT_PATTERNS.copy() + custom_bot_patterns
+        else:
+            bot_patterns = custom_bot_patterns
+
         return cls(
             rules=rules,
             default_depth=modules_data.get("default_depth", 2),
             root_patterns=modules_data.get("root_patterns", DEFAULT_ROOT_PATTERNS.copy()),
             generated_patterns=generated_patterns,
             include_default_generated=include_default_generated,
+            bot_patterns=bot_patterns,
+            bot_logins=custom_bot_logins,
+            include_default_bots=include_default_bots,
         )
 
     @classmethod
@@ -251,6 +292,68 @@ class ModuleConfig:
 
         return False
 
+    def is_bot(self, login: str, user_type: str | None = None) -> bool:
+        """Check if a login represents a bot account.
+
+        Args:
+            login: GitHub login/username
+            user_type: Optional user type from GitHub API (e.g., "Bot", "User")
+
+        Returns:
+            True if the login matches bot patterns, is in bot_logins list,
+            or user_type is "Bot"
+        """
+        if not login:
+            return False
+
+        # Check user type from GitHub API
+        if user_type == "Bot":
+            return True
+
+        # Check exact login matches
+        if login in self.bot_logins:
+            return True
+
+        # Check glob patterns
+        # Note: We need to escape [ and ] in patterns for fnmatch since it treats them
+        # as character classes. We use a simple regex-based approach instead.
+        for pattern in self.bot_patterns:
+            if self._match_bot_pattern(pattern, login):
+                return True
+
+        return False
+
+    def _match_bot_pattern(self, pattern: str, login: str) -> bool:
+        """Match a bot pattern against a login.
+
+        Handles patterns like '*[bot]' which fnmatch would interpret as character class.
+        """
+        # Convert glob pattern to regex, treating [] as literal brackets
+        # First escape regex special chars, then convert glob wildcards
+        regex_pattern = re.escape(pattern)
+        regex_pattern = regex_pattern.replace(r"\*", ".*")
+        regex_pattern = regex_pattern.replace(r"\?", ".")
+        regex_pattern = f"^{regex_pattern}$"
+        return bool(re.match(regex_pattern, login))
+
+    def get_bot_name(self, login: str) -> str | None:
+        """Extract a friendly bot name from login.
+
+        Returns the portion before [bot] suffix, or None if not a known bot pattern.
+        """
+        if not login:
+            return None
+
+        # Check known bot logins for friendly names
+        if login in DEFAULT_BOT_LOGINS:
+            return DEFAULT_BOT_LOGINS[login]
+
+        # Extract name from [bot] suffix
+        if login.endswith("[bot]"):
+            return login.replace("[bot]", "")
+
+        return None
+
     def extract_module(self, filepath: str) -> str:
         """Extract module from filepath using config rules.
 
@@ -294,6 +397,15 @@ class ModuleConfig:
         if not self.include_default_generated:
             data["modules"]["include_default_generated"] = False
             data["modules"]["generated_patterns"] = self.generated_patterns
+
+        # Only include bots config if customized
+        if not self.include_default_bots or self.bot_logins:
+            data["bots"] = {}
+            if not self.include_default_bots:
+                data["bots"]["include_defaults"] = False
+                data["bots"]["patterns"] = self.bot_patterns
+            if self.bot_logins:
+                data["bots"]["logins"] = self.bot_logins
 
         return yaml.dump(data, default_flow_style=False, sort_keys=False)
 

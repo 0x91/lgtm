@@ -192,3 +192,132 @@ class TestConfigLoading:
         config = ModuleConfig.default()
         assert len(config.rules) > 0
         assert config.default_depth >= 1
+
+
+class TestBotDetection:
+    """Tests for bot detection configuration."""
+
+    @pytest.fixture
+    def config(self):
+        return ModuleConfig.default()
+
+    def test_standard_bot_suffix(self, config):
+        """Logins ending in [bot] are detected as bots."""
+        assert config.is_bot("renovate[bot]") is True
+        assert config.is_bot("dependabot[bot]") is True
+        assert config.is_bot("cursor[bot]") is True
+        assert config.is_bot("custom-bot[bot]") is True
+
+    def test_human_logins(self, config):
+        """Human logins are not detected as bots."""
+        assert config.is_bot("octocat") is False
+        assert config.is_bot("johndoe") is False
+        assert config.is_bot("bot-lover") is False  # contains 'bot' but not suffix
+
+    def test_github_api_type(self, config):
+        """User type from GitHub API is respected."""
+        assert config.is_bot("some-app", user_type="Bot") is True
+        assert config.is_bot("some-user", user_type="User") is False
+
+    def test_empty_login(self, config):
+        """Empty login returns False."""
+        assert config.is_bot("") is False
+        assert config.is_bot("", user_type="Bot") is False
+
+    def test_custom_bot_logins(self):
+        """Custom bot logins list is checked."""
+        config = ModuleConfig(
+            bot_logins=["ci-bot", "deploy-automation"],
+        )
+        assert config.is_bot("ci-bot") is True
+        assert config.is_bot("deploy-automation") is True
+        assert config.is_bot("regular-user") is False
+
+    def test_custom_bot_patterns(self):
+        """Custom glob patterns for bot detection."""
+        config = ModuleConfig(
+            bot_patterns=["*-automation", "ci-*"],
+            include_default_bots=False,
+        )
+        assert config.is_bot("deploy-automation") is True
+        assert config.is_bot("ci-runner") is True
+        assert config.is_bot("renovate[bot]") is False  # Default pattern disabled
+
+    def test_combined_detection(self):
+        """Patterns and logins are checked together."""
+        config = ModuleConfig(
+            bot_patterns=["*[bot]", "auto-*"],
+            bot_logins=["specific-bot"],
+        )
+        assert config.is_bot("renovate[bot]") is True  # pattern
+        assert config.is_bot("auto-merger") is True  # pattern
+        assert config.is_bot("specific-bot") is True  # explicit login
+        assert config.is_bot("human-user") is False
+
+    def test_get_bot_name_known_bots(self, config):
+        """Known bots return their friendly names."""
+        assert config.get_bot_name("github-actions[bot]") == "github-actions"
+        assert config.get_bot_name("renovate[bot]") == "renovate"
+
+    def test_get_bot_name_unknown_bot(self, config):
+        """Unknown bots with [bot] suffix get name extracted."""
+        assert config.get_bot_name("custom-ci[bot]") == "custom-ci"
+        assert config.get_bot_name("my-app[bot]") == "my-app"
+
+    def test_get_bot_name_not_a_bot(self, config):
+        """Non-bot logins return None."""
+        assert config.get_bot_name("regular-user") is None
+        assert config.get_bot_name("") is None
+
+
+class TestBotConfigLoading:
+    """Tests for loading bot config from YAML."""
+
+    def test_from_dict_with_bots(self):
+        """Load config with bots section."""
+        data = {
+            "bots": {
+                "patterns": ["ci-*"],
+                "logins": ["my-bot"],
+            }
+        }
+        config = ModuleConfig.from_dict(data)
+        # Should include default pattern plus custom
+        assert "*[bot]" in config.bot_patterns
+        assert "ci-*" in config.bot_patterns
+        assert "my-bot" in config.bot_logins
+
+    def test_from_dict_disable_defaults(self):
+        """Disable default bot patterns."""
+        data = {
+            "bots": {
+                "include_defaults": False,
+                "patterns": ["custom-*"],
+            }
+        }
+        config = ModuleConfig.from_dict(data)
+        assert "*[bot]" not in config.bot_patterns
+        assert "custom-*" in config.bot_patterns
+
+    def test_from_dict_empty_bots(self):
+        """Empty bots section uses defaults."""
+        data = {"bots": {}}
+        config = ModuleConfig.from_dict(data)
+        assert "*[bot]" in config.bot_patterns
+        assert config.bot_logins == []
+
+    def test_to_yaml_with_custom_bots(self):
+        """Serialize config with custom bot logins."""
+        config = ModuleConfig(
+            rules=[],
+            bot_logins=["custom-bot"],
+        )
+        yaml_str = config.to_yaml()
+        assert "bots:" in yaml_str
+        assert "custom-bot" in yaml_str
+
+    def test_to_yaml_defaults_not_included(self):
+        """Default config doesn't include bots section in YAML."""
+        config = ModuleConfig.default()
+        yaml_str = config.to_yaml()
+        assert "bots:" not in yaml_str

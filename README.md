@@ -154,6 +154,42 @@ modules:
 
 Only include repo-specific rules—the built-in defaults handle common patterns.
 
+## Bot Detection
+
+The tool automatically identifies bot accounts to separate automated activity from human reviews. This helps answer questions like "what's our human review coverage?" and "which bots are most active?"
+
+### Default behavior
+
+By default, a user is considered a bot if:
+- Their GitHub login ends with `[bot]` (e.g., `renovate[bot]`, `dependabot[bot]`)
+- Their GitHub API user type is `"Bot"`
+
+### Built-in known bots
+
+The tool recognizes common CI/CD and automation bots:
+- `cursor[bot]`, `github-actions[bot]`, `renovate[bot]`, `dependabot[bot]`
+- `incident-io[bot]`, `aikido-security[bot]`, `linear[bot]`
+
+### Custom bot configuration
+
+Add a `bots` section to `lgtm.yaml` to configure additional bots:
+
+```yaml
+bots:
+  # Glob patterns to match bot logins (merged with defaults)
+  patterns:
+    - "ci-*"              # Match ci-runner, ci-deploy, etc.
+    - "*-automation"      # Match deploy-automation, test-automation
+
+  # Specific logins to treat as bots
+  logins:
+    - "jenkins-user"
+    - "internal-deploy-bot"
+
+  # Set false to only use your custom patterns (disable *[bot] default)
+  include_defaults: true
+```
+
 ## What You Get
 
 Eight normalized Parquet tables in `data/raw/`:
