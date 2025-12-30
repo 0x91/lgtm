@@ -86,10 +86,24 @@ def main():
     )
 
     # report command - narrative report
-    subparsers.add_parser(
+    report_parser = subparsers.add_parser(
         "report",
         help="Generate narrative report (recommended)",
         description="Generate a narrative report answering: Is code review adding value?",
+    )
+    report_parser.add_argument(
+        "--format",
+        "-f",
+        choices=["terminal", "pdf"],
+        default="terminal",
+        help="Output format (default: terminal)",
+    )
+    report_parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        default=None,
+        help="Output file path (for PDF format, default: ~/.cache/lgtm/{repo}/report.pdf)",
     )
 
     args = parser.parse_args()
@@ -114,7 +128,7 @@ def main():
     elif args.command == "report":
         from ..report import main as report_main
 
-        report_main()
+        report_main(format=args.format, output=args.output)
 
     elif args.command is None:
         parser.print_help()

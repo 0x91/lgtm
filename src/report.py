@@ -6,6 +6,8 @@ Instead of dumping tables, this tells a story:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import duckdb
 from rich.console import Console
 from rich.panel import Panel
@@ -13,6 +15,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .analyze import get_connection
+from .pdf_export import ReportData, generate_pdf
 from .repo import get_repo
 
 console = Console()
@@ -1062,6 +1065,42 @@ def print_red_flags(flags: list[dict]) -> None:
 
 
 # ============================================================================
+# Data Gathering
+# ============================================================================
+
+
+def gather_report_data(con: duckdb.DuckDBPyConnection) -> ReportData:
+    """Gather all data needed for the report."""
+    stats = get_summary_stats(con)
+    approval_ctx = get_approval_context(con)
+
+    return ReportData(
+        total_prs=stats.get("total_prs", 0),
+        first_pr=str(stats.get("first_pr", ""))[:10] if stats.get("first_pr") else None,
+        last_pr=str(stats.get("last_pr", ""))[:10] if stats.get("last_pr") else None,
+        merged_prs=stats.get("merged_prs", 0),
+        repo_name=get_repo_name(),
+        total_approvals=approval_ctx.get("total_approvals", 0),
+        empty_approvals=approval_ctx.get("empty_approvals", 0),
+        expert_approvals=approval_ctx.get("expert_approvals", 0),
+        expert_empty=approval_ctx.get("expert_empty", 0),
+        familiar_approvals=approval_ctx.get("familiar_approvals", 0),
+        familiar_empty=approval_ctx.get("familiar_empty", 0),
+        firsttime_approvals=approval_ctx.get("firsttime_approvals", 0),
+        firsttime_empty=approval_ctx.get("firsttime_empty", 0),
+        quick_large=get_quick_large_approvals(con),
+        depth_data=get_review_depth_by_type(con),
+        module_data=get_module_reviewers(con),
+        thread_outcomes=get_thread_outcomes(con),
+        iteration_stats=get_iteration_stats(con),
+        feedback_stats=get_feedback_with_code(con),
+        reviewer_experience=get_reviewer_file_experience(con),
+        first_time_reviews=get_first_time_file_reviews(con),
+        red_flags=get_red_flags(con),
+    )
+
+
+# ============================================================================
 # Main Report
 # ============================================================================
 
@@ -1096,10 +1135,22 @@ def generate_report(con: duckdb.DuckDBPyConnection | None = None) -> None:
     console.print()
 
 
-def main() -> None:
-    """CLI entry point."""
+def main(format: str = "terminal", output: Path | str | None = None) -> None:
+    """CLI entry point.
+
+    Args:
+        format: Output format ("terminal" or "pdf")
+        output: Output file path (for PDF format)
+    """
     con = get_connection()
-    generate_report(con)
+
+    if format == "pdf":
+        data = gather_report_data(con)
+        pdf_path = generate_pdf(data, output)
+        console.print(f"[green]PDF report saved to: {pdf_path}[/green]")
+    else:
+        generate_report(con)
+
     con.close()
 
 
