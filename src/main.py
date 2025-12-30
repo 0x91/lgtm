@@ -340,6 +340,12 @@ class DataExtractor:
             nursery.start_soon(fetch_checks)
             nursery.start_soon(fetch_timeline)
 
+        # Fix PR stats from actual file data (list endpoint doesn't include these)
+        if details.files:
+            details.pr.changed_files = len(details.files)
+            details.pr.additions = sum(f.additions for f in details.files)
+            details.pr.deletions = sum(f.deletions for f in details.files)
+
         return details
 
     def merge_details(self, details: PRDetails, pr_number: int):
