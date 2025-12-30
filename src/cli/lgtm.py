@@ -106,6 +106,13 @@ def main():
         help="Output file path (for PDF format, default: ~/.cache/lgtm/{repo}/report.pdf)",
     )
 
+    # mcp command - start MCP server for AI assistants
+    subparsers.add_parser(
+        "mcp",
+        help="Start MCP server for AI assistants (requires lgtm[ai])",
+        description="Start an MCP (Model Context Protocol) server that allows AI assistants to query code review data.",
+    )
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -129,6 +136,11 @@ def main():
         from ..report import main as report_main
 
         report_main(format=args.format, output=args.output)
+
+    elif args.command == "mcp":
+        from ..mcp_server import main as mcp_main
+
+        mcp_main()
 
     elif args.command is None:
         parser.print_help()

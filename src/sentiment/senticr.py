@@ -8,6 +8,8 @@ Key advantages over VADER:
 - Handles code review conventions: "Nit:", "Optional:", "LGTM"
 - Understands technical jargon better
 - 81.4% accuracy vs 37.5% for VADER on code review text
+
+Requires optional dependencies: pip install lgtm[sentiment]
 """
 
 from __future__ import annotations
@@ -18,14 +20,24 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-import nltk
-from nltk.stem.snowball import SnowballStemmer
+# Check if sentiment dependencies are available
+SENTICR_AVAILABLE = False
+_stemmer = None
 
-# Ensure required NLTK data is available
 try:
-    nltk.data.find("taggers/averaged_perceptron_tagger_eng")
-except LookupError:
-    nltk.download("averaged_perceptron_tagger_eng", quiet=True)
+    import nltk
+    from nltk.stem.snowball import SnowballStemmer
+
+    # Ensure required NLTK data is available
+    try:
+        nltk.data.find("taggers/averaged_perceptron_tagger_eng")
+    except LookupError:
+        nltk.download("averaged_perceptron_tagger_eng", quiet=True)
+
+    _stemmer = SnowballStemmer("english")
+    SENTICR_AVAILABLE = True
+except ImportError:
+    pass
 
 
 # ============================================================================
@@ -371,8 +383,6 @@ def preprocess(text: str) -> str:
 # Tokenization and Stemming
 # ============================================================================
 
-_stemmer = SnowballStemmer("english")
-
 
 def tokenize_and_stem(text: str) -> list[str]:
     """Tokenize and stem text, removing stopwords."""
@@ -383,7 +393,11 @@ def tokenize_and_stem(text: str) -> list[str]:
     result = []
     for token in tokens:
         if token not in STOPWORDS and len(token) > 2:
-            result.append(_stemmer.stem(token))
+            # Use stemmer if available, otherwise just use token
+            if _stemmer is not None:
+                result.append(_stemmer.stem(token))
+            else:
+                result.append(token)
 
     return result
 
@@ -447,17 +461,25 @@ def _get_training_data() -> tuple[list[str], list[int]]:
     - 0: negative
     - 1: neutral
     - 2: positive
+
+    Requires: pip install lgtm[sentiment]
     """
+    try:
+        import openpyxl
+    except ImportError:
+        raise ImportError(
+            "Sentiment analysis requires optional dependencies. "
+            "Install with: pip install lgtm[sentiment]"
+        )
 
     import httpx
-    import openpyxl
 
     # Check for cached training data
     data_file = CACHE_DIR / "oracle.xlsx"
     if not data_file.exists():
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         print("Downloading SentiCR training data...")
-        response = httpx.get(TRAINING_DATA_URL, follow_redirects=True)
+        response = httpx.get(TRAINING_DATA_URL, follow_redirects=True, timeout=30.0)
         response.raise_for_status()
         data_file.write_bytes(response.content)
 
@@ -487,9 +509,18 @@ def _get_training_data() -> tuple[list[str], list[int]]:
 
 
 def _train_model():
-    """Train the TF-IDF + Gradient Boosting model."""
-    from sklearn.ensemble import GradientBoostingClassifier
-    from sklearn.feature_extraction.text import TfidfVectorizer
+    """Train the TF-IDF + Gradient Boosting model.
+
+    Requires: pip install lgtm[sentiment]
+    """
+    try:
+        from sklearn.ensemble import GradientBoostingClassifier
+        from sklearn.feature_extraction.text import TfidfVectorizer
+    except ImportError:
+        raise ImportError(
+            "Sentiment analysis requires optional dependencies. "
+            "Install with: pip install lgtm[sentiment]"
+        )
 
     print("Training SentiCR model...")
     texts, labels = _get_training_data()
@@ -549,8 +580,18 @@ def get_sentiment_scores(text: str) -> SentimentScores:
 
     Returns:
         SentimentScores with positive, negative, neutral probabilities.
+        If sentiment dependencies aren't installed, returns neutral scores.
     """
     if not text or not text.strip():
+        return SentimentScores(
+            positive=0.0,
+            negative=0.0,
+            neutral=1.0,
+            compound=0.0,
+        )
+
+    # If sentiment deps not available, return neutral
+    if not SENTICR_AVAILABLE:
         return SentimentScores(
             positive=0.0,
             negative=0.0,
@@ -584,9 +625,19 @@ def get_sentiment_scores(text: str) -> SentimentScores:
 
 
 def analyze_batch(texts: list[str]) -> list[SentimentScores]:
-    """Analyze sentiment of multiple texts efficiently."""
+    """Analyze sentiment of multiple texts efficiently.
+
+    If sentiment dependencies aren't installed, returns neutral scores for all.
+    """
     if not texts:
         return []
+
+    # If sentiment deps not available, return neutral for all
+    if not SENTICR_AVAILABLE:
+        return [
+            SentimentScores(positive=0.0, negative=0.0, neutral=1.0, compound=0.0)
+            for _ in texts
+        ]
 
     vectorizer, clf = _get_model()
 

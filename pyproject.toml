@@ -17,20 +17,31 @@ dependencies = [
     "pyyaml>=6.0.3",
     "tomli ; python_full_version < '3.11'",
     "pytz>=2025.2",
-    "nltk>=3.9.2",
-    "litellm>=1.80.11",
-    "scikit-learn>=1.6.0",
-    "openpyxl>=3.1.0",
-    "fpdf2>=2.8.5",
 ]
 
 [project.scripts]
 lgtm = "src.cli.lgtm:main"
+lgtm-mcp = "src.mcp_server:main"
 
 [project.optional-dependencies]
-analysis = [
-    "polars>=1.0.0",
-    "matplotlib>=3.8.0",
+# Sentiment analysis for review comments (SentiCR)
+sentiment = [
+    "nltk>=3.9.2",
+    "scikit-learn>=1.6.0",
+    "openpyxl>=3.1.0",
+]
+# PDF report export
+pdf = [
+    "fpdf2>=2.8.5",
+]
+# AI/LLM features (MCP server, AI analysis)
+ai = [
+    "litellm>=1.80.11",
+    "mcp>=1.0.0",
+]
+# All optional features
+all = [
+    "lgtm[sentiment,pdf,ai]",
 ]
 dev = [
     "pytest>=8.0.0",

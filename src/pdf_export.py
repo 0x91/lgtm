@@ -1,6 +1,7 @@
 """PDF export for code review analysis reports.
 
 Uses fpdf2 for pure-Python PDF generation.
+Requires optional dependencies: pip install lgtm[pdf]
 """
 
 from __future__ import annotations
@@ -8,7 +9,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from fpdf import FPDF
+# Check if PDF dependencies are available
+PDF_AVAILABLE = False
+
+try:
+    from fpdf import FPDF
+
+    PDF_AVAILABLE = True
+except ImportError:
+    FPDF = None  # type: ignore[misc, assignment]
 
 from .repo import get_repo
 
@@ -89,88 +98,91 @@ def format_minutes(value: float | None) -> str:
     return f"{int(value)} min"
 
 
-class ReportPDF(FPDF):
-    """Custom PDF class for code review reports."""
+# Only define ReportPDF if fpdf2 is available
+if PDF_AVAILABLE:
 
-    def __init__(self, repo_name: str):
-        super().__init__(orientation="P", unit="mm", format="A4")
-        self.repo_name = repo_name
-        self.set_auto_page_break(auto=True, margin=15)
-        self.set_left_margin(15)
-        self.set_right_margin(15)
+    class ReportPDF(FPDF):
+        """Custom PDF class for code review reports."""
 
-    def header(self):
-        """Add header to each page."""
-        self.set_font("Helvetica", "B", 10)
-        self.set_text_color(128, 128, 128)
-        self.cell(0, 10, f"LGTM Report | {self.repo_name}", align="L")
-        self.ln(5)
+        def __init__(self, repo_name: str):
+            super().__init__(orientation="P", unit="mm", format="A4")
+            self.repo_name = repo_name
+            self.set_auto_page_break(auto=True, margin=15)
+            self.set_left_margin(15)
+            self.set_right_margin(15)
 
-    def footer(self):
-        """Add footer to each page."""
-        self.set_y(-15)
-        self.set_font("Helvetica", "I", 8)
-        self.set_text_color(128, 128, 128)
-        self.cell(0, 10, f"Page {self.page_no()}", align="C")
+        def header(self):
+            """Add header to each page."""
+            self.set_font("Helvetica", "B", 10)
+            self.set_text_color(128, 128, 128)
+            self.cell(0, 10, f"LGTM Report | {self.repo_name}", align="L")
+            self.ln(5)
 
-    def chapter_title(self, title: str):
-        """Add a chapter title."""
-        self.set_font("Helvetica", "B", 14)
-        self.set_text_color(0, 102, 204)
-        self.cell(0, 10, title, ln=True)
-        self.ln(2)
+        def footer(self):
+            """Add footer to each page."""
+            self.set_y(-15)
+            self.set_font("Helvetica", "I", 8)
+            self.set_text_color(128, 128, 128)
+            self.cell(0, 10, f"Page {self.page_no()}", align="C")
 
-    def section_title(self, title: str):
-        """Add a section title."""
-        self.set_font("Helvetica", "B", 11)
-        self.set_text_color(51, 51, 51)
-        self.cell(0, 8, title, ln=True)
-        self.ln(1)
+        def chapter_title(self, title: str):
+            """Add a chapter title."""
+            self.set_font("Helvetica", "B", 14)
+            self.set_text_color(0, 102, 204)
+            self.cell(0, 10, title, ln=True)
+            self.ln(2)
 
-    def body_text(self, text: str):
-        """Add body text."""
-        self.set_font("Helvetica", "", 10)
-        self.set_text_color(0, 0, 0)
-        self.multi_cell(0, 5, text)
-        self.ln(2)
+        def section_title(self, title: str):
+            """Add a section title."""
+            self.set_font("Helvetica", "B", 11)
+            self.set_text_color(51, 51, 51)
+            self.cell(0, 8, title, ln=True)
+            self.ln(1)
 
-    def bullet(self, text: str):
-        """Add a bullet point."""
-        self.set_font("Helvetica", "", 10)
-        self.set_text_color(0, 0, 0)
-        # Use cell for simple text output to avoid multi_cell issues
-        self.cell(0, 5, f"  - {text}", ln=True)
+        def body_text(self, text: str):
+            """Add body text."""
+            self.set_font("Helvetica", "", 10)
+            self.set_text_color(0, 0, 0)
+            self.multi_cell(0, 5, text)
+            self.ln(2)
 
-    def metric(self, label: str, value: str, note: str = ""):
-        """Add a metric line."""
-        self.set_font("Helvetica", "", 10)
-        self.set_text_color(0, 0, 0)
-        line = f"  {label}: {value}"
-        if note:
-            line += f" ({note})"
-        self.cell(0, 5, line, ln=True)
+        def bullet(self, text: str):
+            """Add a bullet point."""
+            self.set_font("Helvetica", "", 10)
+            self.set_text_color(0, 0, 0)
+            # Use cell for simple text output to avoid multi_cell issues
+            self.cell(0, 5, f"  - {text}", ln=True)
 
-    def warning(self, text: str):
-        """Add a warning message."""
-        self.set_font("Helvetica", "B", 10)
-        self.set_text_color(204, 102, 0)
-        self.multi_cell(0, 5, f"! {text}")
-        self.set_text_color(0, 0, 0)
+        def metric(self, label: str, value: str, note: str = ""):
+            """Add a metric line."""
+            self.set_font("Helvetica", "", 10)
+            self.set_text_color(0, 0, 0)
+            line = f"  {label}: {value}"
+            if note:
+                line += f" ({note})"
+            self.cell(0, 5, line, ln=True)
 
-    def table_header(self, columns: list[tuple[str, int]]):
-        """Add a table header row."""
-        self.set_font("Helvetica", "B", 9)
-        self.set_fill_color(240, 240, 240)
-        for col, width in columns:
-            self.cell(width, 6, col, border=1, fill=True)
-        self.ln()
+        def warning(self, text: str):
+            """Add a warning message."""
+            self.set_font("Helvetica", "B", 10)
+            self.set_text_color(204, 102, 0)
+            self.multi_cell(0, 5, f"! {text}")
+            self.set_text_color(0, 0, 0)
 
-    def table_row(self, values: list[str], widths: list[int]):
-        """Add a table data row."""
-        self.set_font("Helvetica", "", 9)
-        for val, width in zip(values, widths, strict=False):
-            self.cell(width, 5, str(val), border=1)
-        self.ln()
+        def table_header(self, columns: list[tuple[str, int]]):
+            """Add a table header row."""
+            self.set_font("Helvetica", "B", 9)
+            self.set_fill_color(240, 240, 240)
+            for col, width in columns:
+                self.cell(width, 6, col, border=1, fill=True)
+            self.ln()
+
+        def table_row(self, values: list[str], widths: list[int]):
+            """Add a table data row."""
+            self.set_font("Helvetica", "", 9)
+            for val, width in zip(values, widths, strict=False):
+                self.cell(width, 5, str(val), border=1)
+            self.ln()
 
 
 def generate_pdf(data: ReportData, output_path: Path | str | None = None) -> Path:
@@ -182,7 +194,16 @@ def generate_pdf(data: ReportData, output_path: Path | str | None = None) -> Pat
 
     Returns:
         Path to the generated PDF
+
+    Raises:
+        ImportError: If fpdf2 is not installed
     """
+    if not PDF_AVAILABLE:
+        raise ImportError(
+            "PDF export requires optional dependencies. "
+            "Install with: pip install lgtm[pdf]"
+        )
+
     if output_path is None:
         repo = get_repo()
         output_path = repo.data_dir / "report.pdf"

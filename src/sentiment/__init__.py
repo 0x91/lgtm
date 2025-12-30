@@ -21,7 +21,7 @@ from .analyzer import (
     analyze_comments,
 )
 from .categories import CommentSignals, get_signals
-from .senticr import SentimentScores, get_sentiment_scores
+from .senticr import SENTICR_AVAILABLE, SentimentScores, get_sentiment_scores
 
 __all__ = [
     # Analysis
@@ -34,6 +34,7 @@ __all__ = [
     # Sentiment
     "get_sentiment_scores",
     "SentimentScores",
+    "SENTICR_AVAILABLE",
     # Thread-level
     "ReviewThread",
     "ThreadComment",
