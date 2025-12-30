@@ -30,11 +30,11 @@ uv run lgtm analyze
 |---------|-------------|
 | `lgtm init` | Auto-generate `lgtm.yaml` from package manager workspaces |
 | `lgtm extract` | Pull PR/review data from GitHub API into Parquet files |
-| `lgtm analyze` | Run all 30 analysis queries on extracted data |
+| `lgtm analyze` | Run all 35 analysis queries on extracted data |
 
 ## Analysis Queries
 
-The tool runs 30 queries organized into categories:
+The tool runs 35 queries organized into categories:
 
 ### Core Metrics
 | Query | Description |
@@ -85,6 +85,15 @@ The tool runs 30 queries organized into categories:
 | `pr_type_review_depth` | Review depth by PR type (new-code vs refactor) |
 | `conventional_commits` | Conventional commit adoption by author |
 | `underreviewed_code` | Large code PRs with no substantive review |
+
+### Collaboration Context
+| Query | Description |
+|-------|-------------|
+| `module_experts` | Top authors per module (who knows this code) |
+| `module_reviewers` | Top reviewers per module (who reviews this area) |
+| `collaboration_pairs` | Author-reviewer pairs with history (prs together, shared modules) |
+| `module_collaboration` | Who reviews whom in which modules |
+| `informed_approvals` | Empty approvals with context (expert vs first-time reviewer) |
 
 ## Module Configuration
 

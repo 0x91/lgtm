@@ -37,6 +37,12 @@ from src.analyze import (
     pr_type_review_depth,
     conventional_commits,
     underreviewed_code,
+    # Collaboration context
+    module_experts,
+    module_reviewers,
+    collaboration_pairs,
+    module_collaboration,
+    informed_approvals,
 )
 from src.module_config import ModuleConfig
 
@@ -285,6 +291,37 @@ class TestAnalysisQueries:
         underreviewed_code(mock_db)
         captured = capsys.readouterr()
         assert "Large Code PRs" in captured.out
+
+    # Collaboration context
+    def test_module_experts(self, mock_db, capsys):
+        """module_experts runs without error."""
+        module_experts(mock_db)
+        captured = capsys.readouterr()
+        assert "Module Experts" in captured.out
+
+    def test_module_reviewers(self, mock_db, capsys):
+        """module_reviewers runs without error."""
+        module_reviewers(mock_db)
+        captured = capsys.readouterr()
+        assert "Module Reviewers" in captured.out
+
+    def test_collaboration_pairs(self, mock_db, capsys):
+        """collaboration_pairs runs without error."""
+        collaboration_pairs(mock_db)
+        captured = capsys.readouterr()
+        assert "Collaboration History" in captured.out
+
+    def test_module_collaboration(self, mock_db, capsys):
+        """module_collaboration runs without error."""
+        module_collaboration(mock_db)
+        captured = capsys.readouterr()
+        assert "Module Collaboration" in captured.out
+
+    def test_informed_approvals(self, mock_db, capsys):
+        """informed_approvals runs without error."""
+        informed_approvals(mock_db)
+        captured = capsys.readouterr()
+        assert "Approval Context" in captured.out
 
 
 class TestQueryResults:

@@ -838,6 +838,226 @@ def underreviewed_code(con: duckdb.DuckDBPyConnection) -> None:
     """)
 
 
+# === Collaboration Context ===
+
+
+def module_experts(con: duckdb.DuckDBPyConnection) -> None:
+    """Show who has authored the most PRs per module.
+
+    Module experts are people who deeply understand an area of the codebase.
+    Their reviews of that area carry more weight.
+    """
+    run_query(con, "Module Experts (Top Authors per Module)", """
+        WITH author_module_stats AS (
+            SELECT
+                f.computed_module as module,
+                p.author_login,
+                COUNT(DISTINCT p.pr_number) as prs_authored,
+                SUM(CASE WHEN NOT f.is_gen THEN f.additions + f.deletions ELSE 0 END) as code_churn
+            FROM prs p
+            JOIN files f ON p.pr_number = f.pr_number
+            WHERE NOT p.author_is_bot AND p.merged
+            GROUP BY 1, 2
+        ),
+        ranked AS (
+            SELECT
+                module,
+                author_login,
+                prs_authored,
+                code_churn,
+                ROW_NUMBER() OVER (PARTITION BY module ORDER BY prs_authored DESC) as rank
+            FROM author_module_stats
+            WHERE prs_authored >= 5
+        )
+        SELECT module, author_login as expert, prs_authored, code_churn
+        FROM ranked
+        WHERE rank <= 3
+        ORDER BY module, rank
+    """)
+
+
+def module_reviewers(con: duckdb.DuckDBPyConnection) -> None:
+    """Show who reviews the most PRs per module.
+
+    Frequent reviewers of a module develop expertise even without authoring.
+    """
+    run_query(con, "Module Reviewers (Top Reviewers per Module)", """
+        WITH reviewer_module_stats AS (
+            SELECT
+                f.computed_module as module,
+                r.reviewer_login,
+                COUNT(DISTINCT r.pr_number) as prs_reviewed,
+                COUNT(DISTINCT rc.comment_id) as inline_comments
+            FROM reviews r
+            JOIN files f ON r.pr_number = f.pr_number
+            LEFT JOIN review_comments rc ON r.pr_number = rc.pr_number
+                AND r.reviewer_login = rc.author_login
+            WHERE NOT r.reviewer_is_bot
+            GROUP BY 1, 2
+        ),
+        ranked AS (
+            SELECT
+                module,
+                reviewer_login,
+                prs_reviewed,
+                inline_comments,
+                ROW_NUMBER() OVER (PARTITION BY module ORDER BY prs_reviewed DESC) as rank
+            FROM reviewer_module_stats
+            WHERE prs_reviewed >= 5
+        )
+        SELECT module, reviewer_login as reviewer, prs_reviewed, inline_comments
+        FROM ranked
+        WHERE rank <= 3
+        ORDER BY module, rank
+    """)
+
+
+def collaboration_pairs(con: duckdb.DuckDBPyConnection) -> None:
+    """Show author-reviewer pairs with their shared history.
+
+    High collaboration count suggests the reviewer knows the author's style
+    and the areas they work in.
+    """
+    run_query(con, "Collaboration History (Author-Reviewer Pairs)", """
+        WITH pair_stats AS (
+            SELECT
+                p.author_login as author,
+                r.reviewer_login as reviewer,
+                COUNT(DISTINCT p.pr_number) as prs_together,
+                COUNT(DISTINCT f.computed_module) as shared_modules,
+                SUM(CASE WHEN r.state = 'APPROVED' THEN 1 ELSE 0 END) as approvals,
+                SUM(CASE WHEN r.state = 'CHANGES_REQUESTED' THEN 1 ELSE 0 END) as changes_requested
+            FROM prs p
+            JOIN reviews r ON p.pr_number = r.pr_number
+            JOIN files f ON p.pr_number = f.pr_number
+            WHERE NOT p.author_is_bot
+              AND NOT r.reviewer_is_bot
+              AND p.author_login != r.reviewer_login
+            GROUP BY 1, 2
+        )
+        SELECT
+            author,
+            reviewer,
+            prs_together,
+            shared_modules,
+            approvals,
+            changes_requested,
+            ROUND(100.0 * changes_requested / NULLIF(approvals + changes_requested, 0), 1) as pushback_rate
+        FROM pair_stats
+        WHERE prs_together >= 10
+        ORDER BY prs_together DESC
+        LIMIT 20
+    """)
+
+
+def module_collaboration(con: duckdb.DuckDBPyConnection) -> None:
+    """Show which author-reviewer pairs collaborate on which modules.
+
+    A quick approval from someone who has reviewed 50 of your PRs in this module
+    is very different from a quick approval from a stranger.
+    """
+    run_query(con, "Module Collaboration (Who Reviews Whom Where)", """
+        WITH module_pairs AS (
+            SELECT
+                f.computed_module as module,
+                p.author_login as author,
+                r.reviewer_login as reviewer,
+                COUNT(DISTINCT p.pr_number) as prs_in_module,
+                SUM(CASE WHEN r.state = 'APPROVED' AND (r.body IS NULL OR TRIM(r.body) = '')
+                         THEN 1 ELSE 0 END) as quick_approvals
+            FROM prs p
+            JOIN reviews r ON p.pr_number = r.pr_number
+            JOIN files f ON p.pr_number = f.pr_number
+            WHERE NOT p.author_is_bot
+              AND NOT r.reviewer_is_bot
+              AND p.author_login != r.reviewer_login
+              AND NOT f.is_gen
+            GROUP BY 1, 2, 3
+        )
+        SELECT
+            module,
+            author,
+            reviewer,
+            prs_in_module,
+            quick_approvals,
+            ROUND(100.0 * quick_approvals / prs_in_module, 1) as quick_approval_rate
+        FROM module_pairs
+        WHERE prs_in_module >= 5
+        ORDER BY prs_in_module DESC
+        LIMIT 30
+    """)
+
+
+def informed_approvals(con: duckdb.DuckDBPyConnection) -> None:
+    """Analyze empty approvals with collaboration context.
+
+    An empty approval might be informed (reviewer knows the code well)
+    or uninformed (first time reviewing this author/module).
+    """
+    run_query(con, "Approval Context (Informed vs First-Time)", """
+        WITH approval_context AS (
+            SELECT
+                r.pr_number,
+                p.author_login as author,
+                r.reviewer_login as reviewer,
+                f.computed_module as module,
+                r.body,
+                r.submitted_at
+            FROM reviews r
+            JOIN prs p ON r.pr_number = p.pr_number
+            JOIN files f ON r.pr_number = f.pr_number
+            WHERE r.state = 'APPROVED'
+              AND NOT r.reviewer_is_bot
+              AND NOT p.author_is_bot
+              AND NOT f.is_gen
+        ),
+        prior_history AS (
+            SELECT
+                ac.pr_number,
+                ac.author,
+                ac.reviewer,
+                ac.module,
+                ac.body,
+                -- Count prior collaborations before this PR
+                COUNT(DISTINCT CASE
+                    WHEN r2.submitted_at < ac.submitted_at
+                    THEN r2.pr_number
+                END) as prior_reviews_of_author,
+                COUNT(DISTINCT CASE
+                    WHEN r2.submitted_at < ac.submitted_at
+                    AND f2.computed_module = ac.module
+                    THEN r2.pr_number
+                END) as prior_reviews_in_module
+            FROM approval_context ac
+            LEFT JOIN reviews r2 ON r2.reviewer_login = ac.reviewer
+            LEFT JOIN prs p2 ON r2.pr_number = p2.pr_number
+                AND p2.author_login = ac.author
+                AND p2.pr_number != ac.pr_number
+            LEFT JOIN files f2 ON r2.pr_number = f2.pr_number
+            GROUP BY 1, 2, 3, 4, 5
+        )
+        SELECT
+            CASE
+                WHEN prior_reviews_in_module >= 10 THEN 'Expert (10+ in module)'
+                WHEN prior_reviews_of_author >= 10 THEN 'Familiar (10+ with author)'
+                WHEN prior_reviews_of_author >= 3 THEN 'Some history (3-9)'
+                ELSE 'First-time (<3)'
+            END as reviewer_context,
+            COUNT(*) as approvals,
+            SUM(CASE WHEN body IS NULL OR TRIM(body) = '' THEN 1 ELSE 0 END) as empty_approvals,
+            ROUND(100.0 * SUM(CASE WHEN body IS NULL OR TRIM(body) = '' THEN 1 ELSE 0 END) / COUNT(*), 1) as empty_rate
+        FROM prior_history
+        GROUP BY 1
+        ORDER BY
+            CASE reviewer_context
+                WHEN 'Expert (10+ in module)' THEN 1
+                WHEN 'Familiar (10+ with author)' THEN 2
+                WHEN 'Some history (3-9)' THEN 3
+                ELSE 4
+            END
+    """)
+
+
 def main() -> None:
     """Run all analysis queries."""
     con = get_connection()
@@ -887,6 +1107,13 @@ def main() -> None:
     pr_type_review_depth(con)
     conventional_commits(con)
     underreviewed_code(con)
+
+    # Collaboration context
+    module_experts(con)
+    module_reviewers(con)
+    collaboration_pairs(con)
+    module_collaboration(con)
+    informed_approvals(con)
 
     con.close()
 
