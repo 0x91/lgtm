@@ -6,9 +6,10 @@ import duckdb
 from src.report import (
     format_pct,
     format_hours,
-    analyze_review_substance,
-    analyze_review_timing,
-    analyze_review_load,
+    format_minutes,
+    get_summary_stats,
+    get_approval_context,
+    get_review_depth_by_type,
 )
 from src.module_config import ModuleConfig
 
@@ -17,8 +18,9 @@ class TestFormatters:
     """Test formatting functions."""
 
     def test_format_pct(self):
-        assert format_pct(50.0) == "50.0%"
-        assert format_pct(0.0) == "0.0%"
+        assert format_pct(50.0) == "50%"
+        assert format_pct(50.5) == "50.5%"
+        assert format_pct(0.0) == "0%"
         assert format_pct(None) == "N/A"
 
     def test_format_hours_minutes(self):
@@ -35,6 +37,11 @@ class TestFormatters:
 
     def test_format_hours_none(self):
         assert format_hours(None) == "N/A"
+
+    def test_format_minutes(self):
+        assert format_minutes(5) == "5 min"
+        assert format_minutes(0.5) == "<1 min"
+        assert format_minutes(None) == "N/A"
 
 
 @pytest.fixture
@@ -71,7 +78,7 @@ def mock_db():
         ) AS t(comment_id, pr_number, author_login, author_id, author_is_bot, body, path, line)
     """)
 
-    # Files table
+    # Files table with precomputed columns
     con.execute("""
         CREATE TABLE files AS
         SELECT *, module(filename) as computed_module, is_generated(filename) as is_gen
@@ -84,24 +91,32 @@ def mock_db():
     return con
 
 
-class TestReportSections:
-    """Test individual report sections."""
+class TestDataFetching:
+    """Test data fetching functions."""
 
-    def test_analyze_review_substance(self, mock_db):
-        """Report generates substance analysis."""
-        section = analyze_review_substance(mock_db)
-        assert section.headline is not None
-        assert "approval" in section.summary.lower() or "review" in section.summary.lower()
+    def test_get_summary_stats(self, mock_db):
+        """Summary stats returns expected structure."""
+        stats = get_summary_stats(mock_db)
+        assert stats["total_prs"] == 2
+        assert stats["merged_prs"] == 2
+        assert stats["first_pr"] is not None
+        assert stats["last_pr"] is not None
 
-    def test_analyze_review_timing(self, mock_db):
-        """Report generates timing analysis."""
-        section = analyze_review_timing(mock_db)
-        assert section.headline is not None
-        assert "median" in section.summary.lower() or "wait" in section.summary.lower()
+    def test_get_approval_context(self, mock_db):
+        """Approval context returns expected structure."""
+        ctx = get_approval_context(mock_db)
+        assert "total_approvals" in ctx
+        assert "empty_approvals" in ctx
+        assert "expert_approvals" in ctx
+        assert "firsttime_approvals" in ctx
 
-    def test_analyze_review_load(self, mock_db):
-        """Report generates load analysis."""
-        section = analyze_review_load(mock_db)
-        assert section.headline is not None
-        # Should mention reviewers
-        assert "review" in section.summary.lower()
+    def test_get_review_depth_by_type(self, mock_db):
+        """Review depth returns list of dicts."""
+        depth = get_review_depth_by_type(mock_db)
+        assert isinstance(depth, list)
+        # Each row should have expected keys
+        for row in depth:
+            assert "type" in row
+            assert "prs" in row
+            assert "avg_comments" in row
+            assert "pct_feedback" in row
