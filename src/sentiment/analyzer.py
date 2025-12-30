@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .categories import CommentSignals, get_signals
-from .vader import SentimentScores, get_sentiment_scores
+from .senticr import SentimentScores, get_sentiment_scores
 
 
 @dataclass

@@ -8,7 +8,7 @@ This module provides:
 - Simple text signals (rubber stamp, has code block, etc.)
 - Thread-level structures (conversations, resolution status)
 - Outcome-based metrics
-- VADER for basic sentiment polarity
+- SentiCR-style sentiment (TF-IDF + GBT trained on code review data)
 """
 
 from .analyzer import (
@@ -21,7 +21,7 @@ from .analyzer import (
     analyze_comments,
 )
 from .categories import CommentSignals, get_signals
-from .vader import SentimentScores, get_sentiment_scores
+from .senticr import SentimentScores, get_sentiment_scores
 
 __all__ = [
     # Analysis
