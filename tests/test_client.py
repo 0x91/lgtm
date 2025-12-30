@@ -90,6 +90,7 @@ class TestGitHubClient:
         response = httpx.Response(403, json={"message": "forbidden"}, headers={"X-RateLimit-Remaining": "100"})
         assert await github_client._handle_rate_limit(response) is False
 
+    @pytest.mark.slow
     @pytest.mark.trio
     @respx.mock
     async def test_secondary_rate_limit_403_with_retry_after(self, github_client, autojump_clock):
@@ -107,6 +108,7 @@ class TestGitHubClient:
         result = await github_client.get("/test")
         assert result["ok"] is True
 
+    @pytest.mark.slow
     @pytest.mark.trio
     @respx.mock
     async def test_secondary_rate_limit_429_with_retry_after(self, github_client, autojump_clock):
