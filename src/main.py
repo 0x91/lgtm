@@ -154,11 +154,15 @@ class DataExtractor:
         # Control flag
         self._stop_requested = False
 
-    def _handle_interrupt(self, signum, frame):
-        """Handle Ctrl+C gracefully - save state and exit."""
-        self._stop_requested = True
-        self.stats.state = ExtractionState.PAUSED
-        logger.info("Interrupt received, stopping gracefully...")
+    async def _signal_watcher(self, nursery: trio.Nursery) -> None:
+        """Watch for interrupt signals and cancel the nursery gracefully."""
+        with trio.open_signal_receiver(signal.SIGINT, signal.SIGTERM) as signal_aiter:
+            async for sig in signal_aiter:
+                self._stop_requested = True
+                self.stats.state = ExtractionState.PAUSED
+                logger.info(f"Signal {sig} received, stopping gracefully...")
+                nursery.cancel_scope.cancel()
+                break
 
     def load_checkpoint(self, refresh_days: int | None = None) -> bool:
         """Load checkpoint if exists.
@@ -198,7 +202,7 @@ class DataExtractor:
                     self.processed_prs -= recent_prs
                     self.console.print(f"[cyan]Refreshing {len(recent_prs)} PRs from last {refresh_days} days[/]")
 
-            self.stats.skipped_prs = len(self.processed_prs)
+            # Note: skipped_prs is counted dynamically in _pr_producer()
             return True
         except Exception as e:
             self.console.print(f"[yellow]Warning: Failed to load checkpoint: {e}[/]")
@@ -490,12 +494,14 @@ class DataExtractor:
             "State", state_str,
             "Auth", auth_str,
         )
+        # Show checkpoint count + new total
+        checkpoint_count = len(self.processed_prs) - self.stats.processed_prs
         table.add_row(
             "Total PRs", str(self.stats.total_prs),
             "Rate Limit", f"{self.stats.rate_limit_remaining} remaining",
         )
         table.add_row(
-            "Processed", f"{self.stats.processed_prs} ({self.stats.skipped_prs} skipped)",
+            "Processed", f"{self.stats.processed_prs} new (+{checkpoint_count} from checkpoint)",
             "API Requests", str(self.stats.api_requests),
         )
         table.add_row(
@@ -674,10 +680,6 @@ class DataExtractor:
 
         self.console.print("\n[dim]Press Ctrl+C to stop (progress is saved)[/]\n")
 
-        # Setup signal handler
-        signal.signal(signal.SIGINT, self._handle_interrupt)
-        signal.signal(signal.SIGTERM, self._handle_interrupt)
-
         # Create producer/consumer pipeline
         send_channel, receive_channel = trio.open_memory_channel[dict](PR_QUEUE_SIZE)
         limiter = trio.CapacityLimiter(CONCURRENT_PRS)
@@ -685,6 +687,9 @@ class DataExtractor:
         with Live(self.build_dashboard(), console=self.console, refresh_per_second=2) as live:
             try:
                 async with trio.open_nursery() as nursery:
+                    # Start signal watcher (handles Ctrl+C properly)
+                    nursery.start_soon(self._signal_watcher, nursery)
+
                     # Start producer (fetches PR pages, queues PRs immediately)
                     nursery.start_soon(self._pr_producer, send_channel, limit)
 
@@ -702,7 +707,7 @@ class DataExtractor:
                     await receive_channel.aclose()
 
             except trio.Cancelled:
-                pass  # Normal shutdown
+                pass  # Normal shutdown from signal
 
         # Final save
         was_interrupted = self._stop_requested
