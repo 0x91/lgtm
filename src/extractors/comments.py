@@ -30,6 +30,7 @@ def extract_review_comment(pr_number: int, comment_data: dict) -> ReviewComment:
         comment_id=str(comment_data["id"]),
         pr_number=pr_number,
         author_login=user.get("login", "unknown"),
+        author_id=user.get("id", 0),
         author_is_bot=is_bot(user),
         body=comment_data.get("body", ""),
         path=comment_data.get("path", ""),

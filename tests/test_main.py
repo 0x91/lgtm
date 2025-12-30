@@ -114,10 +114,9 @@ class TestDataExtractor:
     async def test_worker_respects_stop(self, extractor):
         """Test that worker exits when stop is requested."""
         send_channel, receive_channel = trio.open_memory_channel[dict](10)
-        limiter = trio.CapacityLimiter(1)
 
         async with trio.open_nursery() as nursery:
-            nursery.start_soon(extractor._pr_worker, receive_channel, limiter)
+            nursery.start_soon(extractor._pr_worker, receive_channel)
 
             # Request stop before sending anything
             extractor._stop_requested = True

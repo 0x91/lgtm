@@ -39,6 +39,7 @@ class GitHubAppAuth:
 
         self._token: str | None = None
         self._token_expires_at: datetime | None = None
+        self._refresh_lock: trio.Lock | None = None  # Lazy init to avoid trio import at module level
 
     def _generate_jwt(self) -> str:
         """Generate a JWT for GitHub App authentication."""
@@ -73,18 +74,37 @@ class GitHubAppAuth:
         return token, expires_at
 
     async def get_token(self) -> str:
-        """Get a valid installation token, refreshing if needed."""
+        """Get a valid installation token, refreshing if needed.
+
+        Uses a lock to prevent multiple concurrent refresh attempts.
+        """
+        # Lazy init lock (can't create trio.Lock outside async context)
+        if self._refresh_lock is None:
+            self._refresh_lock = trio.Lock()
+
         now = datetime.now(UTC)
 
-        # Refresh if no token or expires in less than 5 minutes
+        # Quick check without lock - if token is valid, return it
         if (
-            self._token is None
-            or self._token_expires_at is None
-            or self._token_expires_at <= now + timedelta(minutes=5)
+            self._token is not None
+            and self._token_expires_at is not None
+            and self._token_expires_at > now + timedelta(minutes=5)
         ):
-            self._token, self._token_expires_at = await self._fetch_installation_token()
+            return self._token
 
-        return self._token
+        # Need to refresh - acquire lock to prevent concurrent refreshes
+        async with self._refresh_lock:
+            # Re-check after acquiring lock (another task may have refreshed)
+            now = datetime.now(UTC)
+            if (
+                self._token is not None
+                and self._token_expires_at is not None
+                and self._token_expires_at > now + timedelta(minutes=5)
+            ):
+                return self._token
+
+            self._token, self._token_expires_at = await self._fetch_installation_token()
+            return self._token
 
     @property
     def token_expires_at(self) -> datetime | None:
@@ -177,14 +197,12 @@ class GitHubClient:
                 reset_time = int(response.headers.get("X-RateLimit-Reset", 0))
                 wait_seconds = max(reset_time - time.time(), 60)
                 logger.warning(f"Rate limited (primary). Waiting {wait_seconds:.0f}s until reset...")
-                print(f"\nRate limited. Waiting {wait_seconds:.0f}s until reset...")
                 await trio.sleep(wait_seconds + 1)
                 return True
 
         if response.status_code == 429:
             retry_after = int(response.headers.get("Retry-After", 60))
             logger.warning(f"Rate limited (secondary). Waiting {retry_after}s...")
-            print(f"\nSecondary rate limit. Waiting {retry_after}s...")
             await trio.sleep(retry_after)
             return True
 
@@ -217,7 +235,7 @@ class GitHubClient:
 
             if response.status_code >= 500:
                 wait = 2**attempt
-                print(f"\nServer error {response.status_code}. Retrying in {wait}s...")
+                logger.warning(f"Server error {response.status_code}. Retrying in {wait}s...")
                 await trio.sleep(wait)
                 continue
 

@@ -61,6 +61,7 @@ class ReviewComment(BaseModel):
     comment_id: str
     pr_number: int
     author_login: str
+    author_id: int
     author_is_bot: bool
     body: str
     path: str

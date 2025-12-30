@@ -209,7 +209,11 @@ class DataExtractor:
             return False
 
     def save_checkpoint(self):
-        """Save current progress to checkpoint file."""
+        """Save current progress to checkpoint file atomically.
+
+        Writes to a temp file first, then renames to ensure atomicity.
+        This prevents corruption if the process is killed mid-write.
+        """
         os.makedirs(os.path.dirname(CHECKPOINT_FILE), exist_ok=True)
 
         checkpoint = {
@@ -231,8 +235,11 @@ class DataExtractor:
             },
         }
 
-        with open(CHECKPOINT_FILE, "w") as f:
+        # Write to temp file first, then atomic rename
+        temp_file = f"{CHECKPOINT_FILE}.tmp"
+        with open(temp_file, "w") as f:
             json.dump(checkpoint, f, indent=2)
+        os.replace(temp_file, CHECKPOINT_FILE)  # Atomic on POSIX
 
     def save_error_log(self):
         """Save detailed error log."""
@@ -534,35 +541,30 @@ class DataExtractor:
 
         return table
 
-    async def _process_single_pr(
-        self,
-        pr_data: dict,
-        limiter: trio.CapacityLimiter,
-    ) -> None:
-        """Process a single PR with concurrency limiting."""
-        async with limiter:
-            if self._stop_requested:
-                return
+    async def _process_single_pr(self, pr_data: dict) -> None:
+        """Process a single PR (called by worker tasks)."""
+        if self._stop_requested:
+            return
 
-            pr_number = pr_data["number"]
+        pr_number = pr_data["number"]
 
-            try:
-                details = await self.extract_pr_details(pr_number, pr_data)
-                self.merge_details(details, pr_number)
-                logger.debug(f"PR #{pr_number} extracted successfully")
-            except Exception as e:
-                self.stats.failed_prs += 1
-                error_record = ErrorRecord(
-                    pr_number=pr_number,
-                    error_type=type(e).__name__,
-                    error_message=str(e)[:500],
-                    timestamp=datetime.now(UTC).isoformat(),
-                    retries=self.failed_prs.get(pr_number, ErrorRecord(0, "", "", "")).retries + 1,
-                )
-                self.failed_prs[pr_number] = error_record
-                self.stats.last_error = f"PR #{pr_number}: {type(e).__name__}: {str(e)[:100]}"
-                logger.error(f"PR #{pr_number} failed: {type(e).__name__}: {e}")
-                logger.error(traceback.format_exc())
+        try:
+            details = await self.extract_pr_details(pr_number, pr_data)
+            self.merge_details(details, pr_number)
+            logger.debug(f"PR #{pr_number} extracted successfully")
+        except Exception as e:
+            self.stats.failed_prs += 1
+            error_record = ErrorRecord(
+                pr_number=pr_number,
+                error_type=type(e).__name__,
+                error_message=str(e)[:500],
+                timestamp=datetime.now(UTC).isoformat(),
+                retries=self.failed_prs.get(pr_number, ErrorRecord(0, "", "", "")).retries + 1,
+            )
+            self.failed_prs[pr_number] = error_record
+            self.stats.last_error = f"PR #{pr_number}: {type(e).__name__}: {str(e)[:100]}"
+            logger.error(f"PR #{pr_number} failed: {type(e).__name__}: {e}")
+            logger.error(traceback.format_exc())
 
     async def _pr_producer(
         self,
@@ -607,17 +609,17 @@ class DataExtractor:
                     except Exception as e:
                         logger.warning(f"Could not fetch failed PR #{pr_num}: {e}")
 
-    async def _pr_worker(
-        self,
-        receive_channel: trio.MemoryReceiveChannel,
-        limiter: trio.CapacityLimiter,
-    ) -> None:
-        """Worker that processes PRs from the queue concurrently."""
+    async def _pr_worker(self, receive_channel: trio.MemoryReceiveChannel) -> None:
+        """Worker that processes PRs from the queue.
+
+        Concurrency is controlled by the number of workers (CONCURRENT_PRS),
+        not by a limiter - each worker processes one PR at a time.
+        """
         async with receive_channel:
             async for pr_data in receive_channel:
                 if self._stop_requested:
                     break
-                await self._process_single_pr(pr_data, limiter)
+                await self._process_single_pr(pr_data)
 
     async def _checkpoint_task(self, interval: float = 30.0) -> None:
         """Periodically save checkpoints and update rate limit."""
@@ -682,7 +684,6 @@ class DataExtractor:
 
         # Create producer/consumer pipeline
         send_channel, receive_channel = trio.open_memory_channel[dict](PR_QUEUE_SIZE)
-        limiter = trio.CapacityLimiter(CONCURRENT_PRS)
 
         with Live(self.build_dashboard(), console=self.console, refresh_per_second=2) as live:
             try:
@@ -693,9 +694,9 @@ class DataExtractor:
                     # Start producer (fetches PR pages, queues PRs immediately)
                     nursery.start_soon(self._pr_producer, send_channel, limit)
 
-                    # Start workers (process PRs concurrently)
+                    # Start workers (CONCURRENT_PRS workers = concurrent PR processing)
                     for _ in range(CONCURRENT_PRS):
-                        nursery.start_soon(self._pr_worker, receive_channel.clone(), limiter)
+                        nursery.start_soon(self._pr_worker, receive_channel.clone())
 
                     # Start checkpoint task (saves every 30s)
                     nursery.start_soon(self._checkpoint_task)
